@@ -39,8 +39,8 @@ O durumda alternatif olarak şu projelere de göz atabilirsiniz: **SpoofDPI**,
 ## Kurulum (kaynaktan)
 
 ```bash
-git clone https://github.com/cagritaskn/GoodbyeDPI-Turkey.git
-cd GoodbyeDPI-Turkey
+git clone https://github.com/MictoNode/GoodbyeDPI-Turkey-mac.git
+cd GoodbyeDPI-Turkey-mac
 ./macos/build.sh
 ```
 
@@ -166,3 +166,44 @@ sudo networksetup -setdnsservers              "Wi-Fi" Empty
 - **DNS sızıntısı**: SOCKS5 default olarak DNS sorgularını uzaktan çözer ama
   bazı uygulamalar DNS'i kendi başına yapar. Bu yüzden script default yöntemde
   sistem DNS'ini Yandex'e ayarlar.
+
+## Discord Desktop support
+
+Discord Desktop updater may not use a SOCKS5 proxy directly on some macOS versions. For this reason, GOST is used as a small HTTP-to-SOCKS5 bridge.
+
+Connection flow:
+
+```text
+Discord
+   |
+   | HTTP/HTTPS proxy :8080
+   v
+ GOST
+   |
+   | SOCKS5 :1080
+   v
+ ciadpi
+   |
+   v
+ Internet
+```
+
+Install GOST with Homebrew:
+
+```bash
+brew install gost
+```
+
+Start the Discord proxy bridge:
+
+```bash
+./macos/scripts/discord_proxy.sh
+```
+
+Or launch Discord with the HTTP proxy automatically:
+
+```bash
+./macos/scripts/discord.sh
+```
+
+The `discord.sh` script starts GOST when needed and launches Discord with the required proxy environment variables. The LaunchAgent can also keep GOST running in the background across macOS sessions.
