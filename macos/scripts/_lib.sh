@@ -475,7 +475,11 @@ run_service_remove() {
         log "Per-domain DNS dosyaları kaldırılıyor: $RESOLVER_DIR"
         remove_split_resolvers
     fi
-    rm -f "$SPLIT_DNS_STATE"
+    # If split-tunnel was active, restore the full-tunnel DNS snapshot so no
+    # secondary enabled service is left with cleared (Empty) DNS. The
+    # cleanup_and_restore below then returns the active service to its
+    # pre-install DNS.
+    restore_split_dns_state
 
     if launchctl print "system/${LAUNCHD_LABEL}" >/dev/null 2>&1; then
         log "Hizmet durduruluyor: ${LAUNCHD_LABEL}"
