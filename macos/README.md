@@ -167,11 +167,11 @@ sudo networksetup -setdnsservers              "Wi-Fi" Empty
   bazı uygulamalar DNS'i kendi başına yapar. Bu yüzden script default yöntemde
   sistem DNS'ini Yandex'e ayarlar.
 
-## Discord Desktop support
+## Discord Desktop desteği
 
-Discord Desktop updater may not use a SOCKS5 proxy directly on some macOS versions. For this reason, GOST is used as a small HTTP-to-SOCKS5 bridge.
+Bazı macOS sürümlerinde Discord Desktop güncelleyicisi SOCKS5 proxyyi doğrudan kullanmayabilir. Bu nedenle GOST, HTTP ile SOCKS5 arasında küçük bir köprü olarak kullanılır.
 
-Connection flow:
+Bağlantı akışı:
 
 ```text
 Discord
@@ -188,22 +188,22 @@ Discord
  Internet
 ```
 
-Install GOST with Homebrew:
+GOST kurulumu (Homebrew):
 
 ```bash
 brew install gost
 ```
 
-Start the Discord proxy bridge:
+Discord proxy köprüsünü başlatma:
 
 ```bash
 ./macos/scripts/discord_proxy.sh
 ```
 
-Or launch Discord with the HTTP proxy automatically:
+Veya Discordu HTTP proxy ile otomatik olarak başlatma:
 
 ```bash
 ./macos/scripts/discord.sh
 ```
 
-The `discord.sh` script starts GOST when needed and launches Discord with the required proxy environment variables. The LaunchAgent can also keep GOST running in the background across macOS sessions.
+`discord.sh` scripti gerektiğinde GOSTu başlatır ve Discordu gerekli proxy ortam değişkenleriyle çalıştırır. LaunchAgent ayrıca GOSTun macOS oturumları arasında arka planda çalışmasını sağlayabilir.
