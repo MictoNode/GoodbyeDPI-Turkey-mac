@@ -96,8 +96,8 @@ macOS kullanıcıları için özet:
 
 ```bash
 # 1. Tek seferlik kurulum
-git clone https://github.com/cagritaskn/GoodbyeDPI-Turkey.git
-cd GoodbyeDPI-Turkey
+git clone https://github.com/MictoNode/GoodbyeDPI-Turkey-mac.git
+cd GoodbyeDPI-Turkey-mac
 ./macos/build.sh                                            # ciadpi'yi derler
 
 # 2. Tek seferlik kullanım (Ctrl-C ile çıkınca ayarlar otomatik geri alınır)
@@ -106,9 +106,18 @@ sudo ./macos/scripts/turkey_dnsredir.sh
 # 3. Hizmet olarak kurma (her açılışta otomatik başlar)
 sudo ./macos/scripts/service_install_dnsredir_turkey.sh
 
-# 4. Hizmeti kaldırma + ağ ayarlarını eski haline döndürme
-sudo ./macos/scripts/service_remove.sh
+# 4. [Discord/uygulama dostu] Sadece listedeki siteleri proxy'den geçirme
+brew install gost                                          # Discord güncelleyicisi için (tek seferlik)
+sudo ./macos/scripts/split_tunnel.sh on                    # PAC + GOST köprüsü + GUI env
+
+# 5. Hizmeti kaldırma + ağ ayarlarını eski haline döndürme
+sudo ./macos/scripts/service_remove.sh                     # split_tunnel.sh off ile birlikte kullanın
 ```
+
+> Discord'un güncelleyicisi sistem PAC'ini yok sayar; `split_tunnel.sh on`
+> bu yüzden proxy'yi GUI oturumuna ortam değişkeni olarak da verir (oturum
+> açılışında otomatik uygulanan bir LaunchAgent ile). Ayrıntılar:
+> **[`macos/README.md`](macos/README.md)** → "Discord Desktop desteği".
 
 ## Sık Karşılaşılan Sorunlar
 

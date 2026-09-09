@@ -34,6 +34,34 @@ LAUNCHD_LABEL="com.cagritaskn.goodbyedpi-turkey"
 LAUNCHD_PLIST="/Library/LaunchDaemons/${LAUNCHD_LABEL}.plist"
 LAUNCHD_TEMPLATE="${MACOS_DIR}/launchd/${LAUNCHD_LABEL}.plist.template"
 
+# ---- split-tunnel / GOST paths ---------------------------------------------
+#
+# split_tunnel.sh installs a PAC HTTP server plus a GOST HTTP->SOCKS5 bridge
+# as launchd daemons on top of the ciadpi service; service_remove.sh tears
+# them down again. Shared here so both scripts agree on labels and paths.
+
+ETC_DIR="/usr/local/etc/goodbyedpi-turkey"
+PAC_FILE="${ETC_DIR}/proxy.pac"
+PAC_PORT="1085"
+PAC_URL="http://127.0.0.1:${PAC_PORT}/proxy.pac"
+PAC_LABEL="com.cagritaskn.goodbyedpi-turkey-pac"
+PAC_PLIST="/Library/LaunchDaemons/${PAC_LABEL}.plist"
+
+GOST_LABEL="com.cagritaskn.goodbyedpi-turkey-gost"
+GOST_PLIST="/Library/LaunchDaemons/${GOST_LABEL}.plist"
+GOST_PORT="8080"
+GOST_LOG="/var/log/goodbyedpi-gost.log"
+
+# GOST HTTP proxy exported as GUI-session env vars. The Discord desktop
+# updater (Squirrel) ignores system PAC and only honors HTTP(S)_PROXY-style
+# env vars. GUI apps inherit launchd's session env, so a login LaunchAgent
+# (/Library/LaunchAgents) re-applies these vars for every session; split_tunnel
+# also applies them to the current session via launchctl asuser.
+GOST_ENV_LABEL="com.cagritaskn.goodbyedpi-turkey-gost-env"
+GOST_ENV_PLIST="/Library/LaunchAgents/${GOST_ENV_LABEL}.plist"
+GOST_ENV_URL="http://127.0.0.1:${GOST_PORT}"
+GOST_ENV_NO_PROXY="localhost,127.0.0.1"
+
 # Defaults — overridable by callers BEFORE sourcing or with env vars.
 CIADPI_HOST="${CIADPI_HOST:-127.0.0.1}"
 CIADPI_PORT="${CIADPI_PORT:-1080}"
@@ -414,6 +442,23 @@ run_service_remove() {
     require_macos
     require_root "$0"
 
+    # Split-tunnel leftovers first: PAC HTTP server + GOST bridge. These are
+    # installed by split_tunnel.sh on top of the ciadpi service.
+    if launchctl print "system/${PAC_LABEL}" >/dev/null 2>&1 || [[ -f "$PAC_PLIST" ]]; then
+        log "PAC sunucusu kaldırılıyor: ${PAC_LABEL}"
+        remove_pac_server
+        disable_pac_on_services
+    fi
+    if launchctl print "system/${GOST_LABEL}" >/dev/null 2>&1 || [[ -f "$GOST_PLIST" ]]; then
+        log "GOST köprüsü kaldırılıyor: ${GOST_LABEL}"
+        remove_gost_service
+    fi
+    if [[ -f "$GOST_ENV_PLIST" ]]; then
+        log "GUI env köprüsü kaldırılıyor: ${GOST_ENV_LABEL}"
+        remove_gost_env_agent
+        clear_gost_env_now
+    fi
+
     if launchctl print "system/${LAUNCHD_LABEL}" >/dev/null 2>&1; then
         log "Hizmet durduruluyor: ${LAUNCHD_LABEL}"
         launchctl bootout "system/${LAUNCHD_LABEL}" 2>/dev/null || true
@@ -430,6 +475,232 @@ run_service_remove() {
     cleanup_and_restore
 
     log "GoodbyeDPI-Turkey kaldırıldı."
+}
+
+# ---- split-tunnel / GOST helpers -------------------------------------------
+
+# Print every enabled network service name (Wi-Fi, Ethernet, ...).
+# *-prefixed (disabled) services are skipped — networksetup refuses to touch
+# them, and a proxy set on a disabled service vanishes when it is enabled.
+network_services() {
+    /usr/sbin/networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | grep -v '^\*' || true
+}
+
+# Locate the GOST binary. Homebrew installs to /opt/homebrew (Apple Silicon)
+# or /usr/local (Intel); launchd daemons run with a minimal PATH, so the plist
+# needs an absolute path.
+gost_bin() {
+    local p
+    for p in "/opt/homebrew/bin/gost" "/usr/local/bin/gost"; do
+        if [[ -x "$p" ]]; then
+            echo "$p"
+            return 0
+        fi
+    done
+    if p="$(command -v gost 2>/dev/null || true)" && [[ -n "$p" && -x "$p" ]]; then
+        echo "$p"
+        return 0
+    fi
+    return 1
+}
+
+require_gost() {
+    if ! gost_bin >/dev/null 2>&1; then
+        err "GOST bulunamadı. Discord güncelleyicisi SOCKS5 kullanamadığı için"
+        err "HTTP->SOCKS5 köprüsü gereklidir:  brew install gost"
+        exit 1
+    fi
+}
+
+# Wait until a local TCP port accepts connections.
+# Args: $1 = port, $2 = tries (each ~0.25s), default 20.
+wait_port() {
+    local port="$1" tries="${2:-20}" n
+    for n in $(seq 1 "$tries"); do
+        if /usr/bin/nc -z -G 1 127.0.0.1 "$port" 2>/dev/null; then
+            return 0
+        fi
+        sleep 0.25
+    done
+    return 1
+}
+
+# Serve $PAC_FILE over HTTP on $PAC_PORT. Chromium (Discord, Chrome) refuses
+# file:// PAC URLs, so python3's http.server runs as a launchd daemon.
+install_pac_server() {
+    mkdir -p "$ETC_DIR"
+    cat >"$PAC_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$PAC_LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>-m</string>
+        <string>http.server</string>
+        <string>$PAC_PORT</string>
+        <string>--bind</string>
+        <string>127.0.0.1</string>
+        <string>--directory</string>
+        <string>$ETC_DIR</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
+PLIST
+    chmod 644 "$PAC_PLIST"
+    launchctl bootout "system/$PAC_LABEL" 2>/dev/null || true
+    launchctl bootstrap system "$PAC_PLIST"
+    launchctl enable "system/$PAC_LABEL" 2>/dev/null || true
+}
+
+remove_pac_server() {
+    launchctl bootout "system/$PAC_LABEL" 2>/dev/null || true
+    rm -f "$PAC_PLIST"
+}
+
+# Turn the auto-proxy (PAC) setting off on every enabled service. SOCKS proxy
+# state is NOT touched here — the callers manage that separately.
+disable_pac_on_services() {
+    local svc
+    while read -r svc; do
+        /usr/sbin/networksetup -setautoproxystate "$svc" off || true
+    done < <(network_services)
+}
+
+# (Re)install the GOST HTTP->SOCKS5 bridge as a launchd daemon. Discord's
+# updater cannot use a SOCKS5 proxy, so split-tunnel PAC routes matched
+# domains via GOST first (see split_tunnel.sh::write_pac).
+install_gost_service() {
+    require_gost
+    local bin
+    bin="$(gost_bin)"
+
+    cat >"$GOST_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$GOST_LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$bin</string>
+        <string>-L</string>
+        <string>http://127.0.0.1:$GOST_PORT</string>
+        <string>-F</string>
+        <string>socks5://127.0.0.1:$CIADPI_PORT</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>StandardOutPath</key>
+    <string>$GOST_LOG</string>
+    <key>StandardErrorPath</key>
+    <string>$GOST_LOG</string>
+</dict>
+</plist>
+PLIST
+    chmod 644 "$GOST_PLIST"
+    launchctl bootout "system/$GOST_LABEL" 2>/dev/null || true
+    launchctl bootstrap system "$GOST_PLIST"
+    launchctl enable "system/$GOST_LABEL" 2>/dev/null || true
+    launchctl kickstart -k "system/$GOST_LABEL" 2>/dev/null || true
+}
+
+remove_gost_service() {
+    launchctl bootout "system/$GOST_LABEL" 2>/dev/null || true
+    rm -f "$GOST_PLIST"
+}
+
+# ---- GOST GUI env bridge ----------------------------------------------------
+
+# Print "<key> <value>" pairs the Discord updater needs. It ignores system
+# PAC and only honors env vars — verified empirically on macOS.
+gost_env_pairs() {
+    printf 'HTTP_PROXY %s\n' "$GOST_ENV_URL"
+    printf 'HTTPS_PROXY %s\n' "$GOST_ENV_URL"
+    printf 'ALL_PROXY %s\n' "$GOST_ENV_URL"
+    printf 'NO_PROXY %s\n' "$GOST_ENV_NO_PROXY"
+}
+
+# Target the GUI session that invoked sudo (falls back to our own uid).
+gost_env_uid() {
+    echo "${SUDO_UID:-$(id -u)}"
+}
+
+# Apply the GOST env vars to the current GUI session. Only affects apps
+# launched afterwards — Discord must be quit and reopened.
+apply_gost_env_now() {
+    local uid k v ok=1
+    uid="$(gost_env_uid)"
+    while read -r k v; do
+        launchctl asuser "$uid" launchctl setenv "$k" "$v" 2>/dev/null || ok=0
+    done < <(gost_env_pairs)
+    if [[ "$ok" -eq 1 ]]; then
+        log "GUI oturumuna proxy env uygulandı (Discord'u kapatıp yeniden açın)."
+    else
+        warn "GUI oturumuna env uygulanamadı — bir sonraki oturum açılışında devreye girer."
+    fi
+}
+
+clear_gost_env_now() {
+    local uid k v
+    uid="$(gost_env_uid)"
+    while read -r k v; do
+        launchctl asuser "$uid" launchctl unsetenv "$k" 2>/dev/null || true
+    done < <(gost_env_pairs)
+}
+
+# Install a login LaunchAgent that re-applies the env vars for every future
+# GUI session (launchctl setenv alone lasts only until logout).
+install_gost_env_agent() {
+    mkdir -p /Library/LaunchAgents
+    cat >"$GOST_ENV_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>$GOST_ENV_LABEL</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>launchctl setenv HTTP_PROXY $GOST_ENV_URL; launchctl setenv HTTPS_PROXY $GOST_ENV_URL; launchctl setenv ALL_PROXY $GOST_ENV_URL; launchctl setenv NO_PROXY $GOST_ENV_NO_PROXY</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+</dict>
+</plist>
+PLIST
+    chmod 644 "$GOST_ENV_PLIST"
+    if [[ -n "${SUDO_UID:-}" ]]; then
+        launchctl bootout "gui/${SUDO_UID}/${GOST_ENV_LABEL}" 2>/dev/null || true
+        if launchctl bootstrap "gui/${SUDO_UID}" "$GOST_ENV_PLIST" 2>/dev/null; then
+            log "GUI env köprüsü oturumda etkin: $GOST_ENV_PLIST"
+        else
+            warn "GUI env köprüsü bir sonraki oturum açılışında devreye girecek."
+        fi
+    fi
+}
+
+remove_gost_env_agent() {
+    if [[ -n "${SUDO_UID:-}" ]]; then
+        launchctl bootout "gui/${SUDO_UID}/${GOST_ENV_LABEL}" 2>/dev/null || true
+    fi
+    rm -f "$GOST_ENV_PLIST"
 }
 
 # ---- ciadpi runner ---------------------------------------------------------

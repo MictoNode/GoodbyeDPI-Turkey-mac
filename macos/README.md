@@ -30,11 +30,49 @@ Windows'ta da işe yarayan TTL-tabanlı yöntemler tek başına çalışıyor ol
 O durumda alternatif olarak şu projelere de göz atabilirsiniz: **SpoofDPI**,
 **Throne** (TUN tabanlı, Roblox/Discord için byedpi'yi sarmalar), **zapret**.
 
+## Hızlı Başlangıç (önerilen — Discord + engelli siteler)
+
+Tek amaç Discord'a (güncellemeleri dahil) ve engelli sitelere girmekse
+aşağıdaki akışı sırayla uygulayın. Bu akış **split tunnel** kullanır: yalnızca
+`macos/split-tunnel-domains.txt` listesindeki siteler proxy'den geçer, diğer
+her site doğrudan bağlanır (bozulmaz/yavaşlamaz). Ayrıntılar aşağıdaki
+bölümlerde.
+
+```bash
+# Ön koşullar (bir kez): Xcode Command Line Tools + Homebrew
+xcode-select --install
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# 1. İndir ve derle (ciadpi'yi üretir)
+git clone https://github.com/MictoNode/GoodbyeDPI-Turkey-mac.git
+cd GoodbyeDPI-Turkey-mac
+./macos/build.sh
+
+# 2. Hizmeti kur — her açılışta otomatik başlar
+sudo ./macos/scripts/service_install_dnsredir_turkey.sh
+
+# 3. Split tunnel'ı aç — PAC + GOST köprüsü + GUI env'ini kurar
+brew install gost
+sudo ./macos/scripts/split_tunnel.sh on
+
+# 4. Discord'u normal şekilde açın (Dock / Finder). Çalışıyorsa bir kez
+#    kapatıp yeniden açın — env yalnızca sonradan açılan uygulamaları etkiler.
+```
+
+Kaldırmak için:
+
+```bash
+sudo ./macos/scripts/split_tunnel.sh off     # env + PAC + GOST kapatılır
+sudo ./macos/scripts/service_remove.sh       # hizmet + ağ ayarları geri alınır
+```
+
 ## Gereksinimler
 
 - macOS 12 (Monterey) veya üstü, Intel veya Apple Silicon.
 - Xcode Command Line Tools: `xcode-select --install`
 - Yönetici (sudo) şifresi.
+- [Discord desteği için] GOST: `brew install gost` (yalnızca
+  `split_tunnel.sh on` kullanacaksanız gerekir).
 
 ## Kurulum (kaynaktan)
 
@@ -116,6 +154,11 @@ kopyalanır; listeyi orada düzenleyip tekrar `on` çalıştırın. Bir sitenin
 gerçekten engelli olup olmadığını `curl -s -o /dev/null -w "%{http_code}"
 --noproxy '*' https://site` ile kontrol edin — `000` dönüyorsa listeye ekleyin.
 
+`on` komutu, eşleşen domainleri `PROXY 127.0.0.1:8080` (GOST, HTTP->SOCKS5
+köprüsü) üzerinden ciadpi'ye yönlendiren bir PAC üretir ve GOST'u launchd
+servisi olarak kurup başlatır. GOST gerekli: `brew install gost` (Discord
+güncelleyicisi SOCKS5 kullanamaz; ayrıntı: [Discord Desktop desteği](#discord-desktop-desteği)).
+
 DNS ayarı değişmez: ISS resolver'ı `discord.com`'u engel IP'sine çözdüğü için
 Yandex DNS split tunnel modunda da gereklidir.
 
@@ -169,41 +212,67 @@ sudo networksetup -setdnsservers              "Wi-Fi" Empty
 
 ## Discord Desktop desteği
 
-Bazı macOS sürümlerinde Discord Desktop güncelleyicisi SOCKS5 proxyyi doğrudan kullanmayabilir. Bu nedenle GOST, HTTP ile SOCKS5 arasında küçük bir köprü olarak kullanılır.
+Discord'un iki ayrı ağ bileşeni vardır ve ikisi de farklı proxy mekanizması
+kullanır:
+
+- **Uygulamanın kendisi** (Electron/Chromium) sistem PAC'ini izler.
+- **Güncelleyicisi** (Squirrel) sistem PAC'ini **tamamen yok sayar**; yalnızca
+  `HTTP_PROXY`/`HTTPS_PROXY` gibi ortam değişkenlerini dinler.
+
+Bu yüzden `split_tunnel.sh on` iki şeyi birden kurar:
+
+1. **PAC** — listedeki domainleri `PROXY 127.0.0.1:8080` üzerinden ciadpi'ye
+   yönlendirir (uygulama için).
+2. **GUI env köprüsü** — GOST adresini `launchctl setenv` ile oturumun ortam
+   değişkenlerine ekler ve oturum açılışında tekrar uygulayan bir LaunchAgent
+   kurar (`/Library/LaunchAgents/…-gost-env.plist`). GUI uygulamaları ortamı
+   launchd oturumundan aldığı için, Discord'u Dock'tan açsanız bile güncelleyici
+   proxy'yi görür. Güncelleme sonrası Discord'u yeniden başlatan süreç de aynı
+   oturum ortamından geçtiği için env kaybolmaz — scripte dönmek gerekmez.
 
 Bağlantı akışı:
 
 ```text
-Discord
-   |
-   | HTTP/HTTPS proxy :8080
-   v
- GOST
-   |
-   | SOCKS5 :1080
-   v
- ciadpi
-   |
-   v
- Internet
+Discord uygulaması (Chromium)          Discord güncelleyici (Squirrel)
+   |  sistem PAC'i                          |  oturum HTTP_PROXY env'i
+   +---------------------+------------------+
+                         v
+              GOST HTTP proxy :8080 (launchd, KeepAlive)
+                         |
+                         | SOCKS5 :1080
+                         v
+              ciadpi (launchd, KeepAlive)
+                         |
+                         v
+                      Internet
 ```
 
-GOST kurulumu (Homebrew):
+Kurulum (tek seferlik):
 
 ```bash
 brew install gost
+./macos/build.sh
+sudo ./macos/scripts/service_install_dnsredir_turkey.sh   # ciadpi'yi servis olarak kurar
+sudo ./macos/scripts/split_tunnel.sh on                   # PAC + GOST + GUI env köprüsü
 ```
 
-Discord proxy köprüsünü başlatma:
+`split_tunnel.sh on`, GOST köprüsünü ve env köprüsünü kurup başlatır.
+Ardından Discord'u bir kez kapatıp normal şekilde (Finder, dock) yeniden
+açın — env yalnızca sonradan açılan uygulamaları etkiler.
+
+Kaldırmak için:
 
 ```bash
-./macos/scripts/discord_proxy.sh
+sudo ./macos/scripts/split_tunnel.sh off   # env köprüsü + PAC + GOST kapatılır
+sudo ./macos/scripts/service_remove.sh     # her şey kaldırılır
 ```
 
-Veya Discordu HTTP proxy ile otomatik olarak başlatma:
+Notlar:
 
-```bash
-./macos/scripts/discord.sh
-```
-
-`discord.sh` scripti gerektiğinde GOSTu başlatır ve Discordu gerekli proxy ortam değişkenleriyle çalıştırır. LaunchAgent ayrıca GOSTun macOS oturumları arasında arka planda çalışmasını sağlayabilir.
+- `split_tunnel.sh on` GOST bulamazsa hata verir; önce `brew install gost`.
+- PAC'i düzenlemek isterseniz domainleri
+  `macos/split-tunnel-domains.txt` içinde değiştirip `split_tunnel.sh on`
+  komutunu tekrar çalıştırın.
+- Env değişkenleri tüm GUI uygulamalarının oturumuna eklenir; yalnızca ortam
+  değişkenlerini okuyan uygulamalar etkilenir (Discord güncelleyicisi gibi).
+  Chromium tabanlı uygulamalar env'i yok sayıp PAC'i kullanır.
