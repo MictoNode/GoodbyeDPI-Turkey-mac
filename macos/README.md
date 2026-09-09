@@ -159,8 +159,11 @@ köprüsü) üzerinden ciadpi'ye yönlendiren bir PAC üretir ve GOST'u launchd
 servisi olarak kurup başlatır. GOST gerekli: `brew install gost` (Discord
 güncelleyicisi SOCKS5 kullanamaz; ayrıntı: [Discord Desktop desteği](#discord-desktop-desteği)).
 
-DNS ayarı değişmez: ISS resolver'ı `discord.com`'u engel IP'sine çözdüğü için
-Yandex DNS split tunnel modunda da gereklidir.
+DNS de bölünür: `on` komutu sistem genelindeki Yandex DNS'i kaldırıp yerine
+listedeki her domain için `/etc/resolver/<domain>` dosyası yazar. Böylece
+yalnızca o domainler (ciadpi'nin kendi çözümlemesi dahil) Yandex üzerinden
+çözülür; geri kalan tüm trafik DHCP/ISS resolver'ını kullanır ve DNS sızıntısı
+olmaz. `off` komutu bu dosyaları kaldırıp tam tünel DNS'ini geri getirir.
 
 ## Yöntem ↔ Argüman Eşlemesi
 
@@ -206,9 +209,12 @@ sudo networksetup -setdnsservers              "Wi-Fi" Empty
   (örn. Chrome belirli sürümler, bazı oyunlar) sistem proxy'sini yok sayar.
   Bu durumda söz konusu uygulamanın ayarlarından proxy'yi elle
   `127.0.0.1:1080` olarak ayarlamanız gerekebilir.
-- **DNS sızıntısı**: SOCKS5 default olarak DNS sorgularını uzaktan çözer ama
-  bazı uygulamalar DNS'i kendi başına yapar. Bu yüzden script default yöntemde
-  sistem DNS'ini Yandex'e ayarlar.
+- **DNS sızıntısı**: Tam tünel modunda sistem DNS'i kasıtlı olarak Yandex'e
+  ayarlanır (ISS resolver'ı engelli domainleri blok IP'sine çözdüğü için).
+  Split tunnel modunda ise Yandex yalnızca listedeki domainlere `/etc/resolver/`
+  dosyalarıyla uygulanır; geri kalan trafik ISS resolver'ını kullanır, sızıntı
+  olmaz. Sızıntı testi hâlâ Yandex gösteriyorsa `split_tunnel.sh off` sonra
+  `on` çalıştırıp DNS'i yeniden bölün.
 
 ## Discord Desktop desteği
 

@@ -94,6 +94,16 @@ on)
     apply_gost_env_now
 
     apply_pac_to_services
+
+    # Split DNS too: snapshot the full-tunnel DNS (once), then replace the
+    # system-wide Yandex DNS with per-domain /etc/resolver entries so only the
+    # listed domains use Yandex and everything else resolves via DHCP/ISP.
+    if [[ ! -f "$SPLIT_DNS_STATE" ]]; then
+        save_split_dns_state
+    fi
+    install_split_resolvers
+    clear_dns_all
+
     echo "Split tunnel acik. ciadpi'den gecen domainler ($DOMAINS):"
     grep -vE '^[[:space:]]*(#|$)' "$DOMAINS" | sed 's/^/  - /'
     ;;
@@ -103,7 +113,9 @@ off)
     remove_gost_service
     remove_pac_server
     restore_socks_to_services
-    echo "Split tunnel kapali; sistem geneli SOCKS geri acildi."
+    remove_split_resolvers
+    restore_split_dns_state
+    echo "Split tunnel kapali; sistem geneli SOCKS ve DNS geri acildi."
     ;;
 status)
     while read -r svc; do
@@ -119,6 +131,9 @@ status)
     fi
     if proxy_env="$(launchctl asuser "$(gost_env_uid)" launchctl getenv HTTP_PROXY 2>/dev/null)"; then
         echo "GUI oturum HTTP_PROXY: $proxy_env"
+    fi
+    if [[ -d "$RESOLVER_DIR" ]] && ls "$RESOLVER_DIR"/* >/dev/null 2>&1; then
+        echo "Per-domain DNS (/etc/resolver): $(ls "$RESOLVER_DIR" | tr '\n' ' ')"
     fi
     ;;
 *)

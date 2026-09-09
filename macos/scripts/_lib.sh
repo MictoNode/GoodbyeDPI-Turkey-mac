@@ -41,6 +41,19 @@ LAUNCHD_TEMPLATE="${MACOS_DIR}/launchd/${LAUNCHD_LABEL}.plist.template"
 # them down again. Shared here so both scripts agree on labels and paths.
 
 ETC_DIR="/usr/local/etc/goodbyedpi-turkey"
+
+# Per-domain DNS resolver files for split-tunnel mode. A file named "<domain>"
+# in /etc/resolver makes mDNSResponder (and therefore ciadpi's getaddrinfo)
+# resolve that domain — and all its subdomains — via the listed nameservers,
+# while every other domain keeps the system/DHCP resolver. This replaces the
+# old system-wide Yandex DNS in split-tunnel mode, so non-Discord traffic no
+# longer leaks its DNS to Yandex.
+RESOLVER_DIR="/etc/resolver"
+
+# Snapshot of each enabled service's DNS, captured when split-tunnel turns on,
+# so that 'off' can restore the full-tunnel DNS exactly (Yandex for the default
+# method, DHCP for the DNS-off alternatives).
+SPLIT_DNS_STATE="${STATE_DIR}/split-dns.env"
 PAC_FILE="${ETC_DIR}/proxy.pac"
 PAC_PORT="1085"
 PAC_URL="http://127.0.0.1:${PAC_PORT}/proxy.pac"
@@ -458,6 +471,11 @@ run_service_remove() {
         remove_gost_env_agent
         clear_gost_env_now
     fi
+    if [[ -d "$RESOLVER_DIR" ]]; then
+        log "Per-domain DNS dosyaları kaldırılıyor: $RESOLVER_DIR"
+        remove_split_resolvers
+    fi
+    rm -f "$SPLIT_DNS_STATE"
 
     if launchctl print "system/${LAUNCHD_LABEL}" >/dev/null 2>&1; then
         log "Hizmet durduruluyor: ${LAUNCHD_LABEL}"
@@ -484,6 +502,86 @@ run_service_remove() {
 # them, and a proxy set on a disabled service vanishes when it is enabled.
 network_services() {
     /usr/sbin/networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | grep -v '^\*' || true
+}
+
+# Print the split-tunnel domain list (non-comment, non-blank lines only).
+split_domains() {
+    local f="$ETC_DIR/split-tunnel-domains.txt"
+    [[ -f "$f" ]] || f="$MACOS_DIR/split-tunnel-domains.txt"
+    grep -vE '^[[:space:]]*(#|$)' "$f" 2>/dev/null || true
+}
+
+# Write /etc/resolver/<domain> files so only the split-tunnel domains resolve
+# via the clean DNS (Yandex) while the rest of the system keeps its normal
+# resolver. mDNSResponder picks these up automatically; ciadpi's getaddrinfo()
+# goes through mDNSResponder, so its own lookups of Discord domains also land
+# on Yandex — no need for a system-wide Yandex DNS anymore.
+install_split_resolvers() {
+    mkdir -p "$RESOLVER_DIR"
+    local d
+    while read -r d; do
+        [[ -z "$d" ]] && continue
+        printf 'nameserver %s\nnameserver %s\n' \
+            "$DEFAULT_DNS_V4_PRIMARY" "$DEFAULT_DNS_V4_SECONDARY" \
+            > "$RESOLVER_DIR/$d"
+        log "Per-domain DNS: $d -> $DEFAULT_DNS_V4_PRIMARY"
+    done < <(split_domains)
+    /usr/bin/dscacheutil -flushcache 2>/dev/null || true
+}
+
+remove_split_resolvers() {
+    local d
+    while read -r d; do
+        [[ -z "$d" ]] && continue
+        rm -f "$RESOLVER_DIR/$d"
+    done < <(split_domains)
+    rmdir "$RESOLVER_DIR" 2>/dev/null || true
+    /usr/bin/dscacheutil -flushcache 2>/dev/null || true
+}
+
+# Snapshot the current DNS of every enabled service so split-tunnel 'off' can
+# restore the full-tunnel DNS exactly. Format: "<service>|<space-separated dns>".
+save_split_dns_state() {
+    mkdir -p "$STATE_DIR"
+    : > "$SPLIT_DNS_STATE"
+    local svc dns
+    while read -r svc; do
+        dns="$(/usr/sbin/networksetup -getdnsservers "$svc" 2>/dev/null || true)"
+        if [[ "$dns" == *"aren't any DNS"* || -z "$dns" ]]; then
+            dns="empty"
+        else
+            dns="$(echo "$dns" | tr '\n' ' ' | sed 's/ *$//')"
+        fi
+        printf '%s|%s\n' "$svc" "$dns" >> "$SPLIT_DNS_STATE"
+    done < <(network_services)
+}
+
+# Restore the DNS snapshot captured by save_split_dns_state(), then drop it.
+restore_split_dns_state() {
+    [[ -f "$SPLIT_DNS_STATE" ]] || return 0
+    local line svc dns
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        svc="${line%%|*}"
+        dns="${line#*|}"
+        if [[ "$dns" == "empty" ]]; then
+            /usr/sbin/networksetup -setdnsservers "$svc" "Empty" || true
+        else
+            # shellcheck disable=SC2086
+            /usr/sbin/networksetup -setdnsservers "$svc" $dns || true
+        fi
+    done < "$SPLIT_DNS_STATE"
+    rm -f "$SPLIT_DNS_STATE"
+}
+
+# Drop the system-wide DNS (back to DHCP) on every enabled service. Used when
+# entering split-tunnel mode so only the listed domains keep Yandex via
+# /etc/resolver and everything else resolves through the ISP as normal.
+clear_dns_all() {
+    local svc
+    while read -r svc; do
+        /usr/sbin/networksetup -setdnsservers "$svc" "Empty" || true
+    done < <(network_services)
 }
 
 # Locate the GOST binary. Homebrew installs to /opt/homebrew (Apple Silicon)
