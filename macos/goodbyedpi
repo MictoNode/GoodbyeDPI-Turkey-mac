@@ -55,10 +55,10 @@ cmd_start() {
 cmd_stop() {
     need_root
 
-    if [[ -f "$PAC_PLIST" || -f "$GOST_PLIST" || -f "$GOST_ENV_PLIST" \
-          || -f "$SPLIT_DNS_STATE" ]]; then
-        "$SCRIPTS/split_tunnel.sh" off
-    fi
+    # service_remove.sh already removes the PAC server, GOST bridge and GUI
+    # env agent. Calling split_tunnel.sh off first would re-enable SOCKS on
+    # every service only for service_remove to turn it off again, leaving a
+    # window where apps are routed to a proxy that is about to stop.
     "$SCRIPTS/service_remove.sh"
     log "Durduruldu; SOCKS/PAC ve DNS kurulum öncesi haline döndürüldü."
 }

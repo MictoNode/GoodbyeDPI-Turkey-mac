@@ -491,25 +491,27 @@ run_service_remove() {
 
     # Split-tunnel leftovers first: PAC HTTP server + GOST bridge. These are
     # installed by split_tunnel.sh on top of the ciadpi service.
+    #
+    # Network settings are cleaned before any daemon is stopped: otherwise
+    # macOS keeps pointing at a PAC/SOCKS/GOST port that no longer listens and
+    # every new connection fails until the setting is fixed.
+    disable_pac_on_services
     if launchctl print "system/${PAC_LABEL}" >/dev/null 2>&1 || [[ -f "$PAC_PLIST" ]]; then
         log "PAC sunucusu kaldırılıyor: ${PAC_LABEL}"
         remove_pac_server
     fi
-    # Always clear the PAC setting: even if the plist vanished, a service left
-    # pointing at our local PAC URL would fail after removal.
-    disable_pac_on_services
-    if launchctl print "system/${GOST_LABEL}" >/dev/null 2>&1 || [[ -f "$GOST_PLIST" ]]; then
-        log "GOST köprüsü kaldırılıyor: ${GOST_LABEL}"
-        remove_gost_service
-    fi
+    # Env vars may outlive the agent plist; leaving them would point new GUI
+    # apps at the now-stopped GOST port.
+    clear_gost_env_now
     if [[ -f "$GOST_ENV_PLIST" ]] \
        || launchctl print "gui/$(gost_env_uid)/${GOST_ENV_LABEL}" >/dev/null 2>&1; then
         log "GUI env köprüsü kaldırılıyor: ${GOST_ENV_LABEL}"
         remove_gost_env_agent
     fi
-    # Env vars may outlive the agent plist; leaving them would point new GUI
-    # apps at the now-stopped GOST port.
-    clear_gost_env_now
+    if launchctl print "system/${GOST_LABEL}" >/dev/null 2>&1 || [[ -f "$GOST_PLIST" ]]; then
+        log "GOST köprüsü kaldırılıyor: ${GOST_LABEL}"
+        remove_gost_service
+    fi
     if [[ -d "$RESOLVER_DIR" ]]; then
         log "Per-domain DNS dosyaları kaldırılıyor: $RESOLVER_DIR"
         remove_split_resolvers
@@ -519,6 +521,15 @@ run_service_remove() {
     # cleanup_and_restore below then returns the active service to its
     # pre-install DNS.
     restore_split_dns_state
+
+    # Restore proxy + DNS to whatever was active before installation while
+    # ciadpi is still listening, so no new connection is routed to a dead port.
+    cleanup_and_restore
+
+    # A snapshot only covers the active service. Clear any remaining SOCKS
+    # entry that points at our own ciadpi port (Ethernet, Thunderbolt Bridge,
+    # ...) so switching networks after removal cannot hit a dead proxy.
+    clear_self_socks_all
 
     if launchctl print "system/${LAUNCHD_LABEL}" >/dev/null 2>&1; then
         log "Hizmet durduruluyor: ${LAUNCHD_LABEL}"
@@ -531,15 +542,6 @@ run_service_remove() {
         log "Plist siliniyor: $LAUNCHD_PLIST"
         rm -f "$LAUNCHD_PLIST"
     fi
-
-    # Restore proxy + DNS to whatever was active before installation.
-    cleanup_and_restore
-
-    # split_tunnel.sh off re-enables SOCKS on every enabled service, but the
-    # snapshot above only covers the active one. Clear any remaining SOCKS
-    # entry that points at our now-stopped ciadpi port (Ethernet, Thunderbolt
-    # Bridge, ...) so switching networks after removal cannot hit a dead proxy.
-    clear_self_socks_all
 
     log "GoodbyeDPI-Turkey kaldırıldı."
 }
