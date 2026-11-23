@@ -313,12 +313,11 @@ install_cleanup_trap() {
 # `--tlsrec`, `--oob` and HTTP header mixing, which the byedpi maintainers
 # explicitly recommend on BSD/macOS.
 #
-# The mapping below was chosen to mimic each Windows method's behaviour as
-# closely as possible: methods that use `--set-ttl 5` (an aggressive fake
-# packet) map to `--split 1+s --disorder 3+s` (aggressive ClientHello
-# fragmentation + reordering); methods built around `--set-ttl 3` (lighter)
-# map to `--disorder 3+s`; the `-9` preset (no fake packet, fragment + record
-# split) maps cleanly to `--split 1+s --tlsrec 1+s`.
+# The mapping below follows the SplitWire-Turkey macOS measurements: most
+# ClientHello-splitting methods only pass TLS 1.3, while Discord's updater
+# (reqwest/native-tls) uses TLS 1.2. `--split 2 --tlsrec 1+s` ("Split 2") is
+# the preset that passes both TLS 1.3 and TLS 1.2, so it is the default.
+# The alternatives keep the older Windows-mirroring combinations.
 #
 # DNS_MODE = "yandex"  -> force the system DNS to Yandex (matches the
 #                         Windows scripts that pass --dns-addr 77.88.8.8).
@@ -331,8 +330,8 @@ install_cleanup_trap() {
 method_args() {
     case "$1" in
         default)
-            # Mirrors: goodbyedpi.exe -5 --set-ttl 5 --dns-addr Yandex
-            echo "--split 1+s --disorder 3+s --tlsrec 3+s --mod-http hcsmix,dcsmix"
+            # Split 2: passes TLS 1.3 and TLS 1.2 (Discord updater).
+            echo "--split 2 --tlsrec 1+s"
             ;;
         alt)
             # Mirrors: goodbyedpi.exe --set-ttl 3

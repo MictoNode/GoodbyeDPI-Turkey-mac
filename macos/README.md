@@ -196,7 +196,7 @@ olmaz. `off` komutu bu dosyaları kaldırıp tam tünel DNS'ini geri getirir.
 
 | Yöntem (Windows)                          | Windows args                       | macOS byedpi args                                          | DNS         |
 |-------------------------------------------|------------------------------------|------------------------------------------------------------|-------------|
-| `turkey_dnsredir`                         | `-5 --set-ttl 5 --dns-addr Y`      | `--split 1+s --disorder 3+s --tlsrec 3+s --mod-http h,d`   | Yandex      |
+| `turkey_dnsredir`                         | `-5 --set-ttl 5 --dns-addr Y`      | `--split 2 --tlsrec 1+s` (Split 2)                         | Yandex      |
 | `turkey_dnsredir_alternative_superonline` | `--set-ttl 3`                      | `--disorder 3+s --tlsrec 3+s`                              | değiştirmez |
 | `turkey_dnsredir_alternative2_*`          | `-5`                               | `--split 1+s --disorder 3+s --mod-http h,d`                | değiştirmez |
 | `turkey_dnsredir_alternative3_*`          | `--set-ttl 3 --dns-addr Y`         | `--disorder 1+s --tlsrec 1+s`                              | Yandex      |
@@ -206,6 +206,14 @@ olmaz. `off` komutu bu dosyaları kaldırıp tam tünel DNS'ini geri getirir.
 
 > `h,d` = `hcsmix,dcsmix` (HTTP Host başlığını karıştırır)
 > Y = Yandex DNS (`77.88.8.8` / `77.88.8.1`)
+>
+> **Varsayılan neden Split 2?** Discord'un güncelleyicisi (reqwest/native-tls)
+> TLS 1.2 kullanır. Ölçümlerde `--split 1+s`, `--disorder`, `--tlsrec 3+s` ve
+> `--oob` gibi hazır yöntemler yalnızca TLS 1.3'ü geçirdi; TLS 1.2 bağlantısı
+> sunucunun ilk ~1400 baytından sonra kesildi ve Discord
+> "Checking for updates" ekranında kaldı. `--split 2 --tlsrec 1+s` (Split 2)
+> hem TLS 1.3 hem TLS 1.2'yi geçirir. Güncelleme denetimini
+> `sudo ./macos/goodbyedpi status` ile test edebilirsiniz.
 >
 > Bu eşlemeleri kendi ISS'niz için iyileştirmek isterseniz
 > `macos/scripts/_lib.sh` içindeki `method_args` fonksiyonunu düzenleyin —
@@ -230,17 +238,20 @@ sudo networksetup -setdnsservers              "Wi-Fi" Empty
 
 - **Discord "Güncelleniyor..." ekranında takılıyor**: Güncelleyici
   `updates.discord.com` tüneline giremiyorsa bu ekranda kalır. En sık nedeni
-  ciadpi'nin dosya tanımlayıcı (FD) limitidir: launchd daemon'ları varsayılan
-  **256** FD ile başlar, ciadpi ise varsayılan **512** eşzamanlı bağlantıya
-  izin verir ve her bağlantı iki FD kullanır. 128 bağlantıdan sonra
-  `accept: Too many open files` başlar ve GOST tünelleri
-  (`unsuccessful tunnel`) başarısız olur. Şablon artık
-  `SoftResourceLimits`/`HardResourceLimits` ile **10240** FD ayarlıyor;
-  eski kurulumu güncellemek için:
+  seçilen DPI yöntemidir: Discord'un güncelleyicisi (reqwest/native-tls)
+  **TLS 1.2** kullanır ve `--split 1+s`, `--disorder`, `--tlsrec 3+s`, `--oob`
+  gibi yöntemler yalnızca TLS 1.3'ü geçirir. Varsayılan yöntem bu yüzden
+  `--split 2 --tlsrec 1+s` (Split 2). Eski kurulumu güncellemek için:
 
   ```bash
   sudo ./macos/goodbyedpi restart
+  sudo ./macos/goodbyedpi status   # TLS 1.2 güncelleyici testi
   ```
+
+  İkincil neden dosya tanımlayıcı (FD) limitidir: launchd daemon'ları
+  varsayılan **256** FD ile başlar, ciadpi ise **512** eşzamanlı bağlantıya
+  izin verir ve her bağlantı iki FD kullanır. Şablon artık
+  `SoftResourceLimits`/`HardResourceLimits` ile **10240** FD ayarlıyor.
 
   Ardından `sudo ./macos/goodbyedpi status` ile güncelleyici yolunu test edin
   ve Discord'u tamamen kapatıp yeniden açın.

@@ -133,7 +133,8 @@ cmd_status() {
     echo
     if port_open "$GOST_PORT"; then
         local code
-        code="$(/usr/bin/curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+        code="$(/usr/bin/curl -sS -o /dev/null -w '%{http_code}' --max-time 12 \
+            --tlsv1.2 --tls-max 1.2 \
             -x "http://127.0.0.1:${GOST_PORT}" https://updates.discord.com/ 2>/dev/null || true)"
         if [[ "$code" == "000" || -z "$code" ]]; then
             warn "Discord güncelleyici yolu BAŞARISIZ (updates.discord.com tüneli kurulamadı)."
