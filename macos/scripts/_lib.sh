@@ -65,6 +65,12 @@ GOST_PLIST="/Library/LaunchDaemons/${GOST_LABEL}.plist"
 GOST_PORT="8080"
 GOST_LOG="/var/log/goodbyedpi-gost.log"
 
+# A transient, plist-less direct HTTP proxy on GOST_PORT. The uninstall path
+# may leave one behind so apps that already inherited the legacy session
+# HTTP_PROXY keep working. It is not a launchd plist and must be removed
+# whenever the real GOST bridge starts.
+DIRECT_BRIDGE_LABEL="com.cagritaskn.goodbyedpi-turkey-direct-bridge"
+
 # Legacy GOST GUI-session env bridge (removed by split_tunnel on/off and
 # service_remove). Older versions exported proxy vars to the whole session;
 # that made apps die when GOST stopped. Discord's updater now gets the vars
@@ -775,14 +781,36 @@ install_gost_service() {
 </plist>
 PLIST
     chmod 644 "$GOST_PLIST"
+
+    # A plist-less direct bridge from an uninstall can hold GOST_PORT while
+    # this launchd job exists but never gets a pid. Remove it first.
+    launchctl remove "$DIRECT_BRIDGE_LABEL" 2>/dev/null || true
+    pkill -f "gost -L http://127.0.0.1:${GOST_PORT}$" 2>/dev/null || true
+
     launchctl bootout "system/$GOST_LABEL" 2>/dev/null || true
     launchctl bootstrap system "$GOST_PLIST"
     launchctl enable "system/$GOST_LABEL" 2>/dev/null || true
     launchctl kickstart -k "system/$GOST_LABEL" 2>/dev/null || true
+
+    # Do not trust the port alone: an unrelated process holding :8080 makes
+    # bootstrap succeed with no GOST pid, and every proxied request then goes
+    # to the wrong place. Fail loudly instead.
+    local pid="" _
+    for _ in $(seq 1 25); do
+        pid="$(launchctl print "system/$GOST_LABEL" 2>/dev/null \
+            | awk '/^[[:space:]]*pid = /{print $2; exit}')"
+        [[ -n "$pid" ]] && break
+        sleep 0.2
+    done
+    if [[ -z "$pid" ]]; then
+        die "GOST launchd süreci başlamadı; :${GOST_PORT} başka bir süreç tarafından kullanılıyor olabilir."
+    fi
 }
 
 remove_gost_service() {
     launchctl bootout "system/$GOST_LABEL" 2>/dev/null || true
+    launchctl remove "$DIRECT_BRIDGE_LABEL" 2>/dev/null || true
+    pkill -f "gost -L http://127.0.0.1:${GOST_PORT}$" 2>/dev/null || true
     rm -f "$GOST_PLIST"
 }
 

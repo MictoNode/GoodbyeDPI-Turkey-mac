@@ -44,14 +44,6 @@ cmd_start() {
         mv -f "$CIADPI_LOG" "${CIADPI_LOG}.1" 2>/dev/null || true
     fi
 
-    # An uninstall may leave a plist-less direct gost bridge on :8080 so apps
-    # that already inherited the old HTTP_PROXY keep working. It is not a
-    # launchd job; stop it before binding the real bridge (the launchd GOST
-    # command includes -F, so this pattern only matches the direct bridge).
-    if ! launchctl print "system/${GOST_LABEL}" >/dev/null 2>&1; then
-        pkill -f "gost -L http://127.0.0.1:${GOST_PORT}$" 2>/dev/null || true
-    fi
-
     "$SCRIPTS/service_install_dnsredir_turkey.sh"
     "$SCRIPTS/split_tunnel.sh" on
 
