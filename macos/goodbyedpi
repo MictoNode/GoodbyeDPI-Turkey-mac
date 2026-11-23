@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # GoodbyeDPI-Turkey macOS tek komut yönetimi.
 #
-#   sudo ./macos/goodbyedpi start     # kur + başlat (split tunnel, GOST, PAC, GUI env)
+#   sudo ./macos/goodbyedpi start     # kur + başlat (split tunnel, GOST, PAC)
 #   sudo ./macos/goodbyedpi stop      # durdur + ağ ayarlarını kurulum öncesine döndür
 #   sudo ./macos/goodbyedpi restart   # stop + start
 #   sudo ./macos/goodbyedpi status    # durum + Discord güncelleyici erişim testi
@@ -48,8 +48,8 @@ cmd_start() {
     "$SCRIPTS/split_tunnel.sh" on
 
     echo
-    log "Hazır. Discord açıksa tamamen kapatıp yeniden açın (Dock'tan çıkış)."
-    log "Güncelleyici proxy ayarlarını yalnızca yeni süreçlerde okur."
+    log "Hazır. Discord güncellemesi takılırsa Discord'u kapatıp ./macos/discord-proxy ile açın."
+    log "Bu betik proxy env'ini yalnızca Discord sürecine verir, oturuma yazmaz."
 }
 
 cmd_stop() {
@@ -116,6 +116,9 @@ cmd_status() {
     local env_proxy
     env_proxy="$(launchctl asuser "$uid" launchctl getenv HTTP_PROXY 2>/dev/null || true)"
     printf '  %-22s %s\n' "GUI HTTP_PROXY" "${env_proxy:-ayarlı değil}"
+    if [[ -n "$env_proxy" ]]; then
+        warn "Oturumda eski global HTTP_PROXY var; bu oturumda açılan uygulamalar ölü proxy'ye gidebilir. Çözüm: oturumu kapatıp açın (stop bunu bir sonraki oturum için temizler)."
+    fi
 
     local d f
     if [[ -d "$RESOLVER_DIR" ]]; then
@@ -168,14 +171,14 @@ usage() {
     cat <<EOF
 Kullanım: sudo $0 <komut>
 
-  start          Hizmeti kur/başlat + split tunnel (PAC, GOST, GUI env)
+  start          Hizmeti kur/başlat + split tunnel (PAC, GOST)
   stop           Hizmeti durdur, proxy/DNS ayarlarını geri al
   restart        stop + start (yeni ayarları uygulamak için)
   status         Durum ve Discord güncelleyici erişim testi
   logs [-f]      Son ciadpi/GOST günlükleri (-f: canlı takip)
 
-Kurulumdan sonra her açılışta otomatik başlar. Discord'u start/restart
-sonrasında tamamen kapatıp yeniden açın.
+Kurulumdan sonra her açılışta otomatik başlar. Discord güncellemesi
+takılırsa Discord'u kapatıp ./macos/discord-proxy ile açın.
 EOF
 }
 

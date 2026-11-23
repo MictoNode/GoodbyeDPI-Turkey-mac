@@ -51,11 +51,11 @@ cd GoodbyeDPI-Turkey-mac
 # 2. GOST köprüsü (bir kez)
 brew install gost
 
-# 3. Tek komutla kur + başlat (launchd + PAC + GOST + GUI env)
+# 3. Tek komutla kur + başlat (launchd + PAC + GOST)
 sudo ./macos/goodbyedpi start
 
-# 4. Discord'u normal şekilde açın (Dock / Finder). Çalışıyorsa tamamen
-#    kapatıp yeniden açın — env yalnızca sonradan açılan uygulamaları etkiler.
+# 4. Discord'u normal şekilde açın (Dock / Finder). Güncelleme takılırsa
+#    Discord'u kapatıp ./macos/discord-proxy ile açın.
 ```
 
 Günlük kullanım:
@@ -262,22 +262,24 @@ kullanır:
 - **Güncelleyicisi** (Squirrel) sistem PAC'ini **tamamen yok sayar**; yalnızca
   `HTTP_PROXY`/`HTTPS_PROXY` gibi ortam değişkenlerini dinler.
 
-Bu yüzden `split_tunnel.sh on` iki şeyi birden kurar:
+Bu yüzden `split_tunnel.sh on` PAC'i kurar; güncelleyici için ortam
+değişkenlerini ise **yalnızca Discord sürecine** veren
+`macos/discord-proxy` başlatıcısı kullanılır. Bu betik `HTTP_PROXY`,
+`HTTPS_PROXY`, `ALL_PROXY` ve `NO_PROXY` değişkenlerini kendi sürecinde
+ayarlayıp Discord'u başlatır; oturum ortamına (`launchctl setenv`) veya
+sistem geneline **yazmaz**.
 
-1. **PAC** — listedeki domainleri `PROXY 127.0.0.1:8080` üzerinden ciadpi'ye
-   yönlendirir (uygulama için).
-2. **GUI env köprüsü** — GOST adresini `launchctl setenv` ile oturumun ortam
-   değişkenlerine ekler ve oturum açılışında tekrar uygulayan bir LaunchAgent
-   kurar (`/Library/LaunchAgents/…-gost-env.plist`). GUI uygulamaları ortamı
-   launchd oturumundan aldığı için, Discord'u Dock'tan açsanız bile güncelleyici
-   proxy'yi görür. Güncelleme sonrası Discord'u yeniden başlatan süreç de aynı
-   oturum ortamından geçtiği için env kaybolmaz — scripte dönmek gerekmez.
+> Eski sürümler bu değişkenleri tüm GUI oturumuna yazıyordu. O durumda
+> oturumda sonradan açılan her uygulama GOST'a bağımlı hale geliyor ve
+> `stop`/kaldırma sırasında GOST kapanınca bağlantıları kopuyordu. Yeni
+> `start` eski LaunchAgent'ı ve oturum değişkenlerini temizler.
 
 Bağlantı akışı:
 
 ```text
 Discord uygulaması (Chromium)          Discord güncelleyici (Squirrel)
-   |  sistem PAC'i                          |  oturum HTTP_PROXY env'i
+   |  sistem PAC'i                          |  discord-proxy'nin verdiği
+   |                                        |  süreç-local HTTP_PROXY
    +---------------------+------------------+
                          v
               GOST HTTP proxy :8080 (launchd, KeepAlive)
@@ -295,19 +297,21 @@ Kurulum (tek seferlik):
 ```bash
 brew install gost
 ./macos/build.sh
-sudo ./macos/scripts/service_install_dnsredir_turkey.sh   # ciadpi'yi servis olarak kurar
-sudo ./macos/scripts/split_tunnel.sh on                   # PAC + GOST + GUI env köprüsü
+sudo ./macos/goodbyedpi start     # launchd + PAC + GOST
 ```
 
-`split_tunnel.sh on`, GOST köprüsünü ve env köprüsünü kurup başlatır.
-Ardından Discord'u bir kez kapatıp normal şekilde (Finder, dock) yeniden
-açın — env yalnızca sonradan açılan uygulamaları etkiler.
+Discord'u normal şekilde (Finder, Dock) açabilirsiniz; uygulama PAC'i izler.
+Güncelleme "Güncelleniyor..." ekranında takılırsa Discord'u tamamen kapatıp
+(Cmd+Q) başlatıcı ile açın:
+
+```bash
+./macos/discord-proxy
+```
 
 Kaldırmak için:
 
 ```bash
-sudo ./macos/scripts/split_tunnel.sh off   # env köprüsü + PAC + GOST kapatılır
-sudo ./macos/scripts/service_remove.sh     # her şey kaldırılır
+sudo ./macos/goodbyedpi stop     # PAC, SOCKS, DNS, env ve launchd temizlenir
 ```
 
 Notlar:
@@ -316,6 +320,5 @@ Notlar:
 - PAC'i düzenlemek isterseniz domainleri
   `macos/split-tunnel-domains.txt` içinde değiştirip `split_tunnel.sh on`
   komutunu tekrar çalıştırın.
-- Env değişkenleri tüm GUI uygulamalarının oturumuna eklenir; yalnızca ortam
-  değişkenlerini okuyan uygulamalar etkilenir (Discord güncelleyicisi gibi).
-  Chromium tabanlı uygulamalar env'i yok sayıp PAC'i kullanır.
+- `discord-proxy` çalışırken Discord zaten açıksa uyarı verir; önce Cmd+Q ile
+  tamamen kapatın. Betik `sudo` ile çalıştırılmaz.

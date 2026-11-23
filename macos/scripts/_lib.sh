@@ -65,11 +65,10 @@ GOST_PLIST="/Library/LaunchDaemons/${GOST_LABEL}.plist"
 GOST_PORT="8080"
 GOST_LOG="/var/log/goodbyedpi-gost.log"
 
-# GOST HTTP proxy exported as GUI-session env vars. The Discord desktop
-# updater (Squirrel) ignores system PAC and only honors HTTP(S)_PROXY-style
-# env vars. GUI apps inherit launchd's session env, so a login LaunchAgent
-# (/Library/LaunchAgents) re-applies these vars for every session; split_tunnel
-# also applies them to the current session via launchctl asuser.
+# Legacy GOST GUI-session env bridge (removed by split_tunnel on/off and
+# service_remove). Older versions exported proxy vars to the whole session;
+# that made apps die when GOST stopped. Discord's updater now gets the vars
+# from the scoped macos/discord-proxy launcher instead.
 GOST_ENV_LABEL="com.cagritaskn.goodbyedpi-turkey-gost-env"
 GOST_ENV_PLIST="/Library/LaunchAgents/${GOST_ENV_LABEL}.plist"
 GOST_ENV_URL="http://127.0.0.1:${GOST_PORT}"
@@ -787,10 +786,16 @@ remove_gost_service() {
     rm -f "$GOST_PLIST"
 }
 
-# ---- GOST GUI env bridge ----------------------------------------------------
+# ---- GOST proxy env (legacy cleanup only) ----------------------------------
+#
+# Older versions wrote HTTP_PROXY/HTTPS_PROXY into the whole GUI session
+# (launchctl setenv + a login LaunchAgent) so Discord's updater would use the
+# GOST bridge. That poisoned every app launched afterwards: when GOST stopped,
+# those apps kept pointing at a dead port and lost connectivity. The updater
+# now gets these vars from the scoped `macos/discord-proxy` launcher instead.
+# These helpers remain to remove the legacy session vars and LaunchAgent.
 
-# Print "<key> <value>" pairs the Discord updater needs. It ignores system
-# PAC and only honors env vars — verified empirically on macOS.
+# Print "<key> <value>" pairs the Discord updater needs.
 gost_env_pairs() {
     printf 'HTTP_PROXY %s\n' "$GOST_ENV_URL"
     printf 'HTTPS_PROXY %s\n' "$GOST_ENV_URL"
@@ -811,62 +816,12 @@ gost_env_uid() {
     echo "${uid:-$(id -u)}"
 }
 
-# Apply the GOST env vars to the current GUI session. Only affects apps
-# launched afterwards — Discord must be quit and reopened.
-apply_gost_env_now() {
-    local uid k v ok=1
-    uid="$(gost_env_uid)"
-    while read -r k v; do
-        launchctl asuser "$uid" launchctl setenv "$k" "$v" 2>/dev/null || ok=0
-    done < <(gost_env_pairs)
-    if [[ "$ok" -eq 1 ]]; then
-        log "GUI oturumuna proxy env uygulandı (Discord'u kapatıp yeniden açın)."
-    else
-        warn "GUI oturumuna env uygulanamadı — bir sonraki oturum açılışında devreye girer."
-    fi
-}
-
 clear_gost_env_now() {
     local uid k v
     uid="$(gost_env_uid)"
     while read -r k v; do
         launchctl asuser "$uid" launchctl unsetenv "$k" 2>/dev/null || true
     done < <(gost_env_pairs)
-}
-
-# Install a login LaunchAgent that re-applies the env vars for every future
-# GUI session (launchctl setenv alone lasts only until logout).
-install_gost_env_agent() {
-    mkdir -p /Library/LaunchAgents
-    cat >"$GOST_ENV_PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>$GOST_ENV_LABEL</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/bin/sh</string>
-        <string>-c</string>
-        <string>launchctl setenv HTTP_PROXY $GOST_ENV_URL; launchctl setenv HTTPS_PROXY $GOST_ENV_URL; launchctl setenv ALL_PROXY $GOST_ENV_URL; launchctl setenv NO_PROXY $GOST_ENV_NO_PROXY</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-</dict>
-</plist>
-PLIST
-    chmod 644 "$GOST_ENV_PLIST"
-    local uid
-    uid="$(gost_env_uid)"
-    if [[ -n "$uid" && "$uid" != "0" ]]; then
-        launchctl bootout "gui/${uid}/${GOST_ENV_LABEL}" 2>/dev/null || true
-        if launchctl bootstrap "gui/${uid}" "$GOST_ENV_PLIST" 2>/dev/null; then
-            log "GUI env köprüsü oturumda etkin: $GOST_ENV_PLIST"
-        else
-            warn "GUI env köprüsü bir sonraki oturum açılışında devreye girecek."
-        fi
-    fi
 }
 
 remove_gost_env_agent() {

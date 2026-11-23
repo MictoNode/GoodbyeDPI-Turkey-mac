@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Launch Discord with the GOST proxy env scoped to this process only.
+#
+# Discord's updater (Squirrel) ignores the system PAC and only reads
+# HTTP_PROXY/HTTPS_PROXY. Older versions exported those vars into the whole
+# GUI session (launchctl setenv + a login LaunchAgent); every app launched
+# afterwards then pointed at GOST and lost connectivity as soon as GOST
+# stopped. This wrapper passes the env only to Discord and never persists it.
+#
+# Usage: ./macos/discord-proxy
+# Requires an active split tunnel (sudo ./macos/goodbyedpi start) and Discord
+# fully quit first (Cmd+Q).
+
+set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/scripts/_lib.sh"
+
+DISCORD_APP="${DISCORD_APP:-/Applications/Discord.app}"
+DISCORD_BIN="${DISCORD_BIN:-$DISCORD_APP/Contents/MacOS/Discord}"
+
+[[ ${EUID:-$(id -u)} -ne 0 ]] || { err "Bu betiği sudo olmadan çalıştırın."; exit 1; }
+
+if [[ ! -x "$DISCORD_BIN" ]]; then
+    die "Discord bulunamadı: $DISCORD_BIN (DISCORD_APP ile yolu değiştirebilirsiniz)"
+fi
+
+if ! /usr/bin/nc -z -G 1 127.0.0.1 "$GOST_PORT" 2>/dev/null; then
+    die "GOST :$GOST_PORT kapalı — önce: sudo $MACOS_DIR/goodbyedpi start"
+fi
+
+if pgrep -x Discord >/dev/null 2>&1; then
+    die "Discord zaten çalışıyor. Önce tamamen kapatın (Cmd+Q), sonra tekrar deneyin."
+fi
+
+# Only this process tree sees the proxy. NO_PROXY keeps localhost direct.
+export HTTP_PROXY="$GOST_ENV_URL"
+export HTTPS_PROXY="$GOST_ENV_URL"
+export ALL_PROXY="$GOST_ENV_URL"
+export NO_PROXY="$GOST_ENV_NO_PROXY"
+
+exec "$DISCORD_BIN" "$@"

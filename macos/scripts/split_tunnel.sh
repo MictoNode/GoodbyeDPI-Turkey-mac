@@ -12,10 +12,8 @@
 # Matched domains are routed "PROXY 127.0.0.1:8080": GOST turns the HTTP
 # proxy into SOCKS5 for ciadpi. The Discord desktop app (Chromium) follows
 # this PAC. Its updater (Squirrel) ignores system PAC entirely and only
-# honors HTTP(S)_PROXY env vars, so 'on' additionally exports those vars to
-# the GUI session (launchctl setenv + a login LaunchAgent). Both mechanisms
-# survive the updater relaunching Discord, because the relaunched app inherits
-# the launchd session env again.
+# honors HTTP(S)_PROXY env vars; launch Discord through `macos/discord-proxy`
+# to give those vars to the updater without exporting them session-wide.
 #
 # 'on' also (re)installs the GOST bridge as a launchd daemon when missing.
 # Run it after a service_install_* script.
@@ -90,8 +88,12 @@ on)
         warn "ciadpi :${SOCKS_PORT} dinlemiyor — önce bir service_install_* scripti kurun."
     fi
 
-    install_gost_env_agent
-    apply_gost_env_now
+    # Remove the legacy GUI-wide proxy env bridge installed by older
+    # versions. It made every app launched afterwards depend on GOST and cut
+    # their connectivity when GOST stopped. Discord's updater now uses the
+    # scoped macos/discord-proxy launcher instead.
+    remove_gost_env_agent
+    clear_gost_env_now
 
     apply_pac_to_services
 
@@ -127,10 +129,10 @@ status)
         echo "GOST köprüsü: kurulu ($GOST_PLIST)"
     fi
     if [[ -f "$GOST_ENV_PLIST" ]]; then
-        echo "GUI env köprüsü: kurulu ($GOST_ENV_PLIST)"
+        echo "Eski GUI env köprüsü: kurulu ($GOST_ENV_PLIST)"
     fi
     if proxy_env="$(launchctl asuser "$(gost_env_uid)" launchctl getenv HTTP_PROXY 2>/dev/null)"; then
-        echo "GUI oturum HTTP_PROXY: $proxy_env"
+        echo "Eski GUI oturum HTTP_PROXY: $proxy_env"
     fi
     if [[ -d "$RESOLVER_DIR" ]] && ls "$RESOLVER_DIR"/* >/dev/null 2>&1; then
         echo "Per-domain DNS (/etc/resolver): $(ls "$RESOLVER_DIR" | tr '\n' ' ')"
