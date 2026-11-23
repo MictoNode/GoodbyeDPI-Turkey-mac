@@ -548,6 +548,10 @@ run_service_remove() {
         rm -f "$LAUNCHD_PLIST"
     fi
 
+    # Keep already-running apps that inherited the old session-wide proxy env
+    # alive. New processes are unaffected; `start` removes the bridge.
+    start_direct_bridge_if_needed
+
     log "GoodbyeDPI-Turkey kaldırıldı."
 }
 
@@ -859,6 +863,43 @@ remove_gost_env_agent() {
         launchctl bootout "gui/${uid}/${GOST_ENV_LABEL}" 2>/dev/null || true
     fi
     rm -f "$GOST_ENV_PLIST"
+}
+
+# True when any running process still carries the legacy session-wide proxy
+# env. `launchctl unsetenv` only affects future processes; already-running
+# apps keep the variable and would lose connectivity when GOST stops.
+# macOS exposes another process's env through `ps -E` (plain `ps eww` hides it).
+legacy_proxy_env_in_use() {
+    /bin/ps -E -ax 2>/dev/null | grep -F "HTTP_PROXY=$GOST_ENV_URL" >/dev/null 2>&1
+}
+
+# If legacy-env processes are still alive, leave a transient, plist-less
+# direct HTTP proxy on GOST_PORT so they keep working after removal. It does
+# no DPI bypass and is removed by the next `start` or a reboot.
+start_direct_bridge_if_needed() {
+    legacy_proxy_env_in_use || return 0
+
+    local bin
+    if ! bin="$(gost_bin)"; then
+        warn "Eski oturum proxy env'i hâlâ kullanımda ama gost bulunamadı; bu uygulamalar bağlantı kuramayabilir."
+        return 0
+    fi
+
+    log "Eski proxy env'i taşıyan uygulamalar var; geçici doğrudan köprü :${GOST_PORT} başlatılıyor."
+    launchctl remove "$DIRECT_BRIDGE_LABEL" 2>/dev/null || true
+    : >"/var/log/goodbyedpi-direct-bridge.log"
+    if ! launchctl submit -l "$DIRECT_BRIDGE_LABEL" \
+        -o "/var/log/goodbyedpi-direct-bridge.log" \
+        -e "/var/log/goodbyedpi-direct-bridge.log" \
+        -- "$bin" -L "http://127.0.0.1:${GOST_PORT}"; then
+        warn "Geçici köprü başlatılamadı."
+        return 0
+    fi
+    if wait_port "$GOST_PORT" 20; then
+        log "Geçici köprü hazır (DPI bypass yok); yeni oturumda gerekmez, start veya yeniden başlatma kaldırır."
+    else
+        warn "Geçici köprü :${GOST_PORT} dinlemiyor."
+    fi
 }
 
 # ---- ciadpi runner ---------------------------------------------------------

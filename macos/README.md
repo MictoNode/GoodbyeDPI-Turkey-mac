@@ -78,6 +78,12 @@ dinlemez), PAC ve GUI proxy ortam değişkenleri her durumda temizlenir,
 DNS DHCP'ye döner. Böylece kaldırma sonrası hiçbir ağ servisi ölü bir
 proxy'yi göstermez.
 
+Eski sürümlerden kalan global `HTTP_PROXY` değişkenini hâlâ taşıyan
+uygulamalar açıksa, `stop` bunların kopmaması için `:8080` üzerinde
+**DPI bypass yapmayan, geçici** bir doğrudan köprü bırakır. Bu köprü
+launchd plist'i değildir; `start` veya yeniden başlatma kaldırır. Yeni
+açılan uygulamalar etkilenmez.
+
 İsterseniz eski alt scriptleri ayrı ayrı da kullanabilirsiniz:
 
 ```bash
