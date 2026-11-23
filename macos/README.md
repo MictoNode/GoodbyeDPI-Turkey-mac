@@ -48,22 +48,43 @@ git clone https://github.com/MictoNode/GoodbyeDPI-Turkey-mac.git
 cd GoodbyeDPI-Turkey-mac
 ./macos/build.sh
 
-# 2. Hizmeti kur — her açılışta otomatik başlar
-sudo ./macos/scripts/service_install_dnsredir_turkey.sh
-
-# 3. Split tunnel'ı aç — PAC + GOST köprüsü + GUI env'ini kurar
+# 2. GOST köprüsü (bir kez)
 brew install gost
-sudo ./macos/scripts/split_tunnel.sh on
 
-# 4. Discord'u normal şekilde açın (Dock / Finder). Çalışıyorsa bir kez
+# 3. Tek komutla kur + başlat (launchd + PAC + GOST + GUI env)
+sudo ./macos/goodbyedpi start
+
+# 4. Discord'u normal şekilde açın (Dock / Finder). Çalışıyorsa tamamen
 #    kapatıp yeniden açın — env yalnızca sonradan açılan uygulamaları etkiler.
 ```
 
-Kaldırmak için:
+Günlük kullanım:
 
 ```bash
-sudo ./macos/scripts/split_tunnel.sh off     # env + PAC + GOST kapatılır
-sudo ./macos/scripts/service_remove.sh       # hizmet + ağ ayarları geri alınır
+sudo ./macos/goodbyedpi start      # kurulum yoksa kurar, varsa yeniden uygular
+sudo ./macos/goodbyedpi stop       # durdurur, proxy/DNS'i kurulum öncesine döndürür
+sudo ./macos/goodbyedpi restart    # stop + start (ayar değişikliğinden sonra)
+sudo ./macos/goodbyedpi status     # daemon/port/PAC/env durumu + Discord güncelleyici testi
+sudo ./macos/goodbyedpi logs -f    # canlı ciadpi/GOST günlükleri
+```
+
+`start` hizmetleri `RunAtLoad` + `KeepAlive` ile kurar; Mac yeniden
+başlatıldığında elle bir şey yapmanız gerekmez. `stop` sonrası tekrar
+`start` yeterlidir.
+
+`stop`, yalnızca bu aracın kendi bıraktığı ayarları geri alır: kendi
+`127.0.0.1:1080` SOCKS kaydı "kapalı" sayılır (ciadpi durunca o port
+dinlemez), PAC ve GUI proxy ortam değişkenleri her durumda temizlenir,
+DNS DHCP'ye döner. Böylece kaldırma sonrası hiçbir ağ servisi ölü bir
+proxy'yi göstermez.
+
+İsterseniz eski alt scriptleri ayrı ayrı da kullanabilirsiniz:
+
+```bash
+sudo ./macos/scripts/service_install_dnsredir_turkey.sh
+sudo ./macos/scripts/split_tunnel.sh on
+sudo ./macos/scripts/split_tunnel.sh off
+sudo ./macos/scripts/service_remove.sh
 ```
 
 ## Gereksinimler
@@ -201,6 +222,22 @@ sudo networksetup -setdnsservers              "Wi-Fi" Empty
 
 ## Sorun giderme
 
+- **Discord "Güncelleniyor..." ekranında takılıyor**: Güncelleyici
+  `updates.discord.com` tüneline giremiyorsa bu ekranda kalır. En sık nedeni
+  ciadpi'nin dosya tanımlayıcı (FD) limitidir: launchd daemon'ları varsayılan
+  **256** FD ile başlar, ciadpi ise varsayılan **512** eşzamanlı bağlantıya
+  izin verir ve her bağlantı iki FD kullanır. 128 bağlantıdan sonra
+  `accept: Too many open files` başlar ve GOST tünelleri
+  (`unsuccessful tunnel`) başarısız olur. Şablon artık
+  `SoftResourceLimits`/`HardResourceLimits` ile **10240** FD ayarlıyor;
+  eski kurulumu güncellemek için:
+
+  ```bash
+  sudo ./macos/goodbyedpi restart
+  ```
+
+  Ardından `sudo ./macos/goodbyedpi status` ile güncelleyici yolunu test edin
+  ve Discord'u tamamen kapatıp yeniden açın.
 - **"Operation not permitted" hatası**: Script'i mutlaka `sudo` ile çalıştırın.
   Script kendiliğinden sudo'ya geçer ama yine de yönetici şifresi sorulur.
 - **"ciadpi bulunamadı"**: Önce `./macos/build.sh` çalıştırın.

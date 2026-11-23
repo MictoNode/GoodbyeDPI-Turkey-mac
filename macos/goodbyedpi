@@ -1,0 +1,190 @@
+#!/usr/bin/env bash
+# GoodbyeDPI-Turkey macOS tek komut yönetimi.
+#
+#   sudo ./macos/goodbyedpi start     # kur + başlat (split tunnel, GOST, PAC, GUI env)
+#   sudo ./macos/goodbyedpi stop      # durdur + ağ ayarlarını kurulum öncesine döndür
+#   sudo ./macos/goodbyedpi restart   # stop + start
+#   sudo ./macos/goodbyedpi status    # durum + Discord güncelleyici erişim testi
+#   sudo ./macos/goodbyedpi logs [-f] # son günlükler
+
+set -euo pipefail
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+ORIG_ARGS=("$@")
+# shellcheck source=scripts/_lib.sh
+source "$(dirname "$SELF")/scripts/_lib.sh"
+
+SCRIPTS="$MACOS_DIR/scripts"
+CIADPI_LOG="/var/log/goodbyedpi-turkey.log"
+
+need_root() {
+    [[ ${EUID:-$(id -u)} -eq 0 ]] && return 0
+    log "Yönetici (root) yetkisi gerekiyor — sudo ile yeniden başlatılıyor..."
+    exec sudo \
+        --preserve-env=CIADPI_HOST,CIADPI_PORT,DEFAULT_DNS_V4_PRIMARY,DEFAULT_DNS_V4_SECONDARY \
+        "$SELF" "${ORIG_ARGS[@]}"
+}
+
+daemon_pid() {
+    launchctl print "system/$1" 2>/dev/null \
+        | awk '/^[[:space:]]*pid = /{print $2; exit}'
+}
+
+port_open() {
+    /usr/bin/nc -z -G 1 127.0.0.1 "$1" 2>/dev/null
+}
+
+cmd_start() {
+    need_root
+    require_ciadpi
+
+    # Re-render the plist on every start so template fixes (FD limits, new
+    # ciadpi flags) apply to existing installations too.
+    if [[ -f "$CIADPI_LOG" ]]; then
+        mv -f "$CIADPI_LOG" "${CIADPI_LOG}.1" 2>/dev/null || true
+    fi
+
+    "$SCRIPTS/service_install_dnsredir_turkey.sh"
+    "$SCRIPTS/split_tunnel.sh" on
+
+    echo
+    log "Hazır. Discord açıksa tamamen kapatıp yeniden açın (Dock'tan çıkış)."
+    log "Güncelleyici proxy ayarlarını yalnızca yeni süreçlerde okur."
+}
+
+cmd_stop() {
+    need_root
+
+    if [[ -f "$PAC_PLIST" || -f "$GOST_PLIST" || -f "$GOST_ENV_PLIST" \
+          || -f "$SPLIT_DNS_STATE" ]]; then
+        "$SCRIPTS/split_tunnel.sh" off
+    fi
+    "$SCRIPTS/service_remove.sh"
+    log "Durduruldu; SOCKS/PAC ve DNS kurulum öncesi haline döndürüldü."
+}
+
+cmd_restart() {
+    cmd_stop
+    cmd_start
+}
+
+cmd_status() {
+    need_root
+
+    echo "GoodbyeDPI-Turkey — macOS durumu"
+    echo
+
+    local label pid
+    for label in "$LAUNCHD_LABEL" "$GOST_LABEL" "$PAC_LABEL"; do
+        if launchctl print "system/$label" >/dev/null 2>&1; then
+            pid="$(daemon_pid "$label")"
+            printf '  %-42s çalışıyor%s\n' "$label" "${pid:+ (pid $pid)}"
+        else
+            printf '  %-42s durmuş\n' "$label"
+        fi
+    done
+    local uid
+    uid="$(gost_env_uid)"
+    if launchctl print "gui/$uid/$GOST_ENV_LABEL" >/dev/null 2>&1; then
+        printf '  %-42s yüklü\n' "$GOST_ENV_LABEL"
+    else
+        printf '  %-42s yüklü değil\n' "$GOST_ENV_LABEL"
+    fi
+
+    echo
+    printf '  %-14s %s\n' "ciadpi :$CIADPI_PORT" \
+        "$(port_open "$CIADPI_PORT" && echo açık || echo KAPALI)"
+    printf '  %-14s %s\n' "GOST :$GOST_PORT" \
+        "$(port_open "$GOST_PORT" && echo açık || echo KAPALI)"
+    printf '  %-14s %s\n' "PAC :$PAC_PORT" \
+        "$(port_open "$PAC_PORT" && echo açık || echo KAPALI)"
+
+    if [[ -f "$LAUNCHD_PLIST" ]]; then
+        local fdlim
+        fdlim="$(plutil -extract SoftResourceLimits.NumberOfFiles raw "$LAUNCHD_PLIST" 2>/dev/null || echo '?')"
+        printf '  %-14s %s\n' "FD limiti" "$fdlim"
+    fi
+
+    echo
+    local svc pac
+    while read -r svc; do
+        pac="$(networksetup -getautoproxyurl "$svc" 2>/dev/null | awk -F': ' '/^Enabled:/{print $2}')"
+        pac="${pac:-?}"
+        printf '  %-22s PAC=%s\n' "$svc" "$pac"
+    done < <(network_services)
+
+    local env_proxy
+    env_proxy="$(launchctl asuser "$uid" launchctl getenv HTTP_PROXY 2>/dev/null || true)"
+    printf '  %-22s %s\n' "GUI HTTP_PROXY" "${env_proxy:-ayarlı değil}"
+
+    local d f
+    if [[ -d "$RESOLVER_DIR" ]]; then
+        d="$(cd "$RESOLVER_DIR" && ls 2>/dev/null | tr '\n' ' ' || true)"
+        printf '  %-22s %s\n' "/etc/resolver" "${d:-boş}"
+    fi
+    if [[ -f "$PAC_FILE" ]]; then
+        f="$(grep -c 'shExpMatch' "$PAC_FILE" 2>/dev/null || true)"
+        printf '  %-22s %s\n' "PAC kuralı" "${f:-0} domain"
+    fi
+
+    echo
+    if port_open "$GOST_PORT"; then
+        local code
+        code="$(/usr/bin/curl -sS -o /dev/null -w '%{http_code}' --max-time 10 \
+            -x "http://127.0.0.1:${GOST_PORT}" https://updates.discord.com/ 2>/dev/null || true)"
+        if [[ "$code" == "000" || -z "$code" ]]; then
+            warn "Discord güncelleyici yolu BAŞARISIZ (updates.discord.com tüneli kurulamadı)."
+        else
+            log "Discord güncelleyici yolu çalışıyor (updates.discord.com HTTP $code)."
+        fi
+    else
+        warn "GOST çalışmadığı için Discord güncelleyici testi atlandı."
+    fi
+
+    local fd_errors
+    fd_errors="$(grep -c 'Too many open files' "$CIADPI_LOG" 2>/dev/null || true)"
+    fd_errors="${fd_errors:-0}"
+    if [[ "$fd_errors" -gt 0 ]]; then
+        warn "Günlükte $fd_errors adet 'Too many open files' var — çalışan hizmet eski FD limitiyle başlamış olabilir: sudo $0 restart"
+    fi
+}
+
+cmd_logs() {
+    need_root
+    local follow=0
+    [[ "${1:-}" == "-f" ]] && follow=1
+    local files=()
+    [[ -f "$CIADPI_LOG" ]] && files+=("$CIADPI_LOG")
+    [[ -f "$GOST_LOG" ]] && files+=("$GOST_LOG")
+    [[ ${#files[@]} -eq 0 ]] && { warn "Günlük dosyası yok."; return 0; }
+    if [[ $follow -eq 1 ]]; then
+        exec tail -n 80 -f "${files[@]}"
+    else
+        tail -n 80 "${files[@]}"
+    fi
+}
+
+usage() {
+    cat <<EOF
+Kullanım: sudo $0 <komut>
+
+  start          Hizmeti kur/başlat + split tunnel (PAC, GOST, GUI env)
+  stop           Hizmeti durdur, proxy/DNS ayarlarını geri al
+  restart        stop + start (yeni ayarları uygulamak için)
+  status         Durum ve Discord güncelleyici erişim testi
+  logs [-f]      Son ciadpi/GOST günlükleri (-f: canlı takip)
+
+Kurulumdan sonra her açılışta otomatik başlar. Discord'u start/restart
+sonrasında tamamen kapatıp yeniden açın.
+EOF
+}
+
+case "${1:-}" in
+    start)   shift; cmd_start "$@" ;;
+    stop)    shift; cmd_stop "$@" ;;
+    restart) shift; cmd_restart "$@" ;;
+    status)  shift; cmd_status "$@" ;;
+    logs)    shift; cmd_logs "$@" ;;
+    ""|-h|--help|help) usage ;;
+    *) err "Bilinmeyen komut: $1"; usage >&2; exit 1 ;;
+esac

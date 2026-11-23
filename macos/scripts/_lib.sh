@@ -156,8 +156,23 @@ detect_network_service() {
 
 # ---- state save / restore --------------------------------------------------
 
+# True when a SOCKS endpoint is the ciadpi port this tool installs. Such a
+# snapshot is a leftover from an earlier GoodbyeDPI install: restoring it
+# after removal would point the system at a port that no longer listens and
+# kill networking. Callers treat it as "proxy off".
+is_self_socks() {
+    [[ "${1:-}" == "$CIADPI_HOST" && "${2:-}" == "$CIADPI_PORT" ]]
+}
+
+# True when a DNS snapshot is exactly the Yandex pair this tool applies.
+is_self_dns() {
+    [[ "${1:-}" == "$DEFAULT_DNS_V4_PRIMARY $DEFAULT_DNS_V4_SECONDARY" ]]
+}
+
 # Write current SOCKS proxy + DNS state for the given service into STATE_FILE
 # so a later cleanup_and_restore can put things back exactly as they were.
+# Values that already belong to this tool are normalised to off/empty so a
+# reinstall never turns a stale snapshot into a dead proxy after removal.
 save_network_state() {
     local service="$1"
     mkdir -p "$STATE_DIR"
@@ -178,6 +193,15 @@ save_network_state() {
     else
         # Compress to space-separated.
         dns_list="$(echo "$dns_list" | tr '\n' ' ' | sed 's/ *$//')"
+    fi
+
+    if is_self_socks "$socks_server" "$socks_port" && [[ "${socks_enabled:-No}" == "Yes" ]]; then
+        warn "Önceki SOCKS proxy kendi ciadpi portumuzu (${CIADPI_HOST}:${CIADPI_PORT}) gösteriyor; devre dışı olarak kaydediliyor."
+        socks_enabled="No"
+    fi
+    if is_self_dns "$dns_list"; then
+        warn "Önceki DNS kendi Yandex ayarımız; kurulum öncesi DHCP olarak kaydediliyor."
+        dns_list="empty"
     fi
 
     {
@@ -236,6 +260,16 @@ cleanup_and_restore() {
     fi
 
     log "Ağ ayarları eski haline döndürülüyor (${svc})..."
+
+    # State files written by older versions may contain this tool's own
+    # endpoint/DNS (captured from a previous install). Restoring those would
+    # leave the system pointing at a stopped proxy or a DNS we never owned.
+    if is_self_socks "${PREV_SOCKS_SERVER:-}" "${PREV_SOCKS_PORT:-}"; then
+        PREV_SOCKS_ENABLED="No"
+    fi
+    if is_self_dns "${PREV_DNS:-}"; then
+        PREV_DNS="empty"
+    fi
 
     if [[ "${PREV_SOCKS_ENABLED:-No}" == "Yes" ]] \
        && [[ -n "${PREV_SOCKS_SERVER:-}" ]] \
@@ -460,17 +494,22 @@ run_service_remove() {
     if launchctl print "system/${PAC_LABEL}" >/dev/null 2>&1 || [[ -f "$PAC_PLIST" ]]; then
         log "PAC sunucusu kaldırılıyor: ${PAC_LABEL}"
         remove_pac_server
-        disable_pac_on_services
     fi
+    # Always clear the PAC setting: even if the plist vanished, a service left
+    # pointing at our local PAC URL would fail after removal.
+    disable_pac_on_services
     if launchctl print "system/${GOST_LABEL}" >/dev/null 2>&1 || [[ -f "$GOST_PLIST" ]]; then
         log "GOST köprüsü kaldırılıyor: ${GOST_LABEL}"
         remove_gost_service
     fi
-    if [[ -f "$GOST_ENV_PLIST" ]]; then
+    if [[ -f "$GOST_ENV_PLIST" ]] \
+       || launchctl print "gui/$(gost_env_uid)/${GOST_ENV_LABEL}" >/dev/null 2>&1; then
         log "GUI env köprüsü kaldırılıyor: ${GOST_ENV_LABEL}"
         remove_gost_env_agent
-        clear_gost_env_now
     fi
+    # Env vars may outlive the agent plist; leaving them would point new GUI
+    # apps at the now-stopped GOST port.
+    clear_gost_env_now
     if [[ -d "$RESOLVER_DIR" ]]; then
         log "Per-domain DNS dosyaları kaldırılıyor: $RESOLVER_DIR"
         remove_split_resolvers
@@ -496,6 +535,12 @@ run_service_remove() {
     # Restore proxy + DNS to whatever was active before installation.
     cleanup_and_restore
 
+    # split_tunnel.sh off re-enables SOCKS on every enabled service, but the
+    # snapshot above only covers the active one. Clear any remaining SOCKS
+    # entry that points at our now-stopped ciadpi port (Ethernet, Thunderbolt
+    # Bridge, ...) so switching networks after removal cannot hit a dead proxy.
+    clear_self_socks_all
+
     log "GoodbyeDPI-Turkey kaldırıldı."
 }
 
@@ -506,6 +551,20 @@ run_service_remove() {
 # them, and a proxy set on a disabled service vanishes when it is enabled.
 network_services() {
     /usr/sbin/networksetup -listallnetworkservices 2>/dev/null | tail -n +2 | grep -v '^\*' || true
+}
+
+# Turn SOCKS off on every service whose proxy points at our own ciadpi port.
+# Other proxy configurations are left untouched.
+clear_self_socks_all() {
+    local svc info server port
+    while read -r svc; do
+        info="$(/usr/sbin/networksetup -getsocksfirewallproxy "$svc" 2>/dev/null || true)"
+        server="$(echo "$info" | awk -F': ' '/^Server:/{print $2; exit}')"
+        port="$(echo "$info" | awk -F': ' '/^Port:/{print $2; exit}')"
+        if is_self_socks "$server" "$port"; then
+            /usr/sbin/networksetup -setsocksfirewallproxystate "$svc" off || true
+        fi
+    done < <(network_services)
 }
 
 # Print the split-tunnel domain list (non-comment, non-blank lines only).
@@ -737,9 +796,17 @@ gost_env_pairs() {
     printf 'NO_PROXY %s\n' "$GOST_ENV_NO_PROXY"
 }
 
-# Target the GUI session that invoked sudo (falls back to our own uid).
+# Target the GUI session that invoked sudo. Falls back to the console user so
+# root shells without SUDO_UID (launchd, `osascript ... with administrator
+# privileges`, `sudo -i`) still update the logged-in session's environment.
 gost_env_uid() {
-    echo "${SUDO_UID:-$(id -u)}"
+    if [[ -n "${SUDO_UID:-}" ]]; then
+        echo "$SUDO_UID"
+        return 0
+    fi
+    local uid
+    uid="$(/usr/bin/stat -f '%u' /dev/console 2>/dev/null || true)"
+    echo "${uid:-$(id -u)}"
 }
 
 # Apply the GOST env vars to the current GUI session. Only affects apps
@@ -788,9 +855,11 @@ install_gost_env_agent() {
 </plist>
 PLIST
     chmod 644 "$GOST_ENV_PLIST"
-    if [[ -n "${SUDO_UID:-}" ]]; then
-        launchctl bootout "gui/${SUDO_UID}/${GOST_ENV_LABEL}" 2>/dev/null || true
-        if launchctl bootstrap "gui/${SUDO_UID}" "$GOST_ENV_PLIST" 2>/dev/null; then
+    local uid
+    uid="$(gost_env_uid)"
+    if [[ -n "$uid" && "$uid" != "0" ]]; then
+        launchctl bootout "gui/${uid}/${GOST_ENV_LABEL}" 2>/dev/null || true
+        if launchctl bootstrap "gui/${uid}" "$GOST_ENV_PLIST" 2>/dev/null; then
             log "GUI env köprüsü oturumda etkin: $GOST_ENV_PLIST"
         else
             warn "GUI env köprüsü bir sonraki oturum açılışında devreye girecek."
@@ -799,8 +868,10 @@ PLIST
 }
 
 remove_gost_env_agent() {
-    if [[ -n "${SUDO_UID:-}" ]]; then
-        launchctl bootout "gui/${SUDO_UID}/${GOST_ENV_LABEL}" 2>/dev/null || true
+    local uid
+    uid="$(gost_env_uid)"
+    if [[ -n "$uid" && "$uid" != "0" ]]; then
+        launchctl bootout "gui/${uid}/${GOST_ENV_LABEL}" 2>/dev/null || true
     fi
     rm -f "$GOST_ENV_PLIST"
 }
@@ -815,7 +886,14 @@ remove_gost_env_agent() {
 start_ciadpi_foreground() {
     log "ciadpi başlatılıyor: $CIADPI_BIN -i $CIADPI_HOST -p $CIADPI_PORT $*"
     log "Ctrl-C veya pencereyi kapatmak GoodbyeDPI-Turkey'i durdurur."
-    "$CIADPI_BIN" -i "$CIADPI_HOST" -p "$CIADPI_PORT" "$@" &
+    # ciadpi needs ~2 FDs per proxied connection (client + upstream) and caps
+    # out at 512 connections by default. macOS shells ship with a 256 soft
+    # limit, which used to end in "accept: Too many open files" and broken
+    # tunnels. Raise the soft limit for the child only.
+    (
+        ulimit -n 10240 2>/dev/null || true
+        exec "$CIADPI_BIN" -i "$CIADPI_HOST" -p "$CIADPI_PORT" "$@"
+    ) &
     local pid=$!
     # Forward SIGINT/SIGTERM to the child so it shuts down gracefully.
     trap 'kill -TERM '"$pid"' 2>/dev/null || true' INT TERM

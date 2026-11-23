@@ -103,16 +103,20 @@ cd GoodbyeDPI-Turkey-mac
 # 2. Tek seferlik kullanım (Ctrl-C ile çıkınca ayarlar otomatik geri alınır)
 sudo ./macos/scripts/turkey_dnsredir.sh
 
-# 3. Hizmet olarak kurma (her açılışta otomatik başlar)
-sudo ./macos/scripts/service_install_dnsredir_turkey.sh
-
-# 4. [Discord/uygulama dostu] Sadece listedeki siteleri proxy'den geçirme
+# 3. [Discord/uygulama dostu] Hizmeti kur + başlat
 brew install gost                                          # Discord güncelleyicisi için (tek seferlik)
-sudo ./macos/scripts/split_tunnel.sh on                    # PAC + GOST köprüsü + GUI env
+sudo ./macos/goodbyedpi start                              # launchd + PAC + GOST + GUI env
 
-# 5. Hizmeti kaldırma + ağ ayarlarını eski haline döndürme
-sudo ./macos/scripts/service_remove.sh                     # split_tunnel.sh off ile birlikte kullanın
+# 4. Günlük yönetim
+sudo ./macos/goodbyedpi status                             # durum + güncelleyici testi
+sudo ./macos/goodbyedpi restart                            # ayar değişikliğinden sonra
+sudo ./macos/goodbyedpi stop                               # durdur + ağ ayarlarını geri al
 ```
+
+`start` gerekli `launchd` hizmetlerini `RunAtLoad` + `KeepAlive` ile kurar;
+Mac her açıldığında otomatik çalışır. Alt scriptleri ayrı ayrı kullanmak
+isterseniz `macos/scripts/` altındaki `service_install_*`, `split_tunnel.sh`
+ve `service_remove.sh` hâlâ kullanılabilir.
 
 > Discord'un güncelleyicisi sistem PAC'ini yok sayar; `split_tunnel.sh on`
 > bu yüzden proxy'yi GUI oturumuna ortam değişkeni olarak da verir (oturum

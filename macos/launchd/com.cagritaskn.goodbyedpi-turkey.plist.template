@@ -26,6 +26,22 @@
     <key>ProcessType</key>
     <string>Background</string>
 
+    <!-- launchd daemons inherit a 256-FD soft limit by default. ciadpi's
+         default connection cap is 512 and each proxied connection uses two
+         descriptors (client + upstream), so 256 guarantees "accept: Too many
+         open files" and failed tunnels after ~128 connections. 10240 matches
+         kern.maxfilesperproc on macOS. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>10240</integer>
+    </dict>
+    <key>HardResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>10240</integer>
+    </dict>
+
     <key>StandardOutPath</key>
     <string>/var/log/goodbyedpi-turkey.log</string>
 
