@@ -107,7 +107,10 @@ sudo ./macos/scripts/turkey_dnsredir.sh
 brew install gost                                          # Discord güncelleyicisi için (tek seferlik)
 sudo ./macos/goodbyedpi start                              # launchd + PAC + GOST
 
-# 4. Günlük yönetim
+# 4. Discord'u Dock/Finder'dan değil, başlatıcı ile açın
+./macos/discord-proxy                                      # güncelleyici proxy'si
+
+# 5. Günlük yönetim
 sudo ./macos/goodbyedpi status                             # durum + güncelleyici testi
 sudo ./macos/goodbyedpi restart                            # ayar değişikliğinden sonra
 sudo ./macos/goodbyedpi stop                               # durdur + ağ ayarlarını geri al
@@ -118,10 +121,12 @@ Mac her açıldığında otomatik çalışır. Alt scriptleri ayrı ayrı kullan
 isterseniz `macos/scripts/` altındaki `service_install_*`, `split_tunnel.sh`
 ve `service_remove.sh` hâlâ kullanılabilir.
 
-> Discord'un güncelleyicisi sistem PAC'ini yok sayar; güncelleme takılırsa
-> Discord'u kapatıp `./macos/discord-proxy` ile açın. Bu betik proxy
-> ortam değişkenlerini yalnızca Discord sürecine verir, oturumun tamamına
-> yazmaz. Ayrıntılar:
+> Discord'un güncelleyicisi sistem PAC'ini yok sayar; bu yüzden Discord'u
+> Dock/Finder'dan değil **her zaman** `./macos/discord-proxy` ile açın. Normal
+> açılışta uygulama çalışsa bile güncelleyici `updates.discord.com`'a
+> erişemez ve sürüm güncel olsa dahi "Checking for updates" ekranında kalır.
+> Betik proxy ortam değişkenlerini yalnızca Discord sürecine verir, oturumun
+> tamamına yazmaz. Ayrıntılar:
 > **[`macos/README.md`](macos/README.md)** → "Discord Desktop desteği".
 
 ## Sık Karşılaşılan Sorunlar

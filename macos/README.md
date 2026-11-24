@@ -54,8 +54,10 @@ brew install gost
 # 3. Tek komutla kur + başlat (launchd + PAC + GOST)
 sudo ./macos/goodbyedpi start
 
-# 4. Discord'u normal şekilde açın (Dock / Finder). Güncelleme takılırsa
-#    Discord'u kapatıp ./macos/discord-proxy ile açın.
+# 4. Discord'u HER ZAMAN başlatıcı ile açın (Dock/Finder'dan açmayın:
+#    güncelleyici sistem PAC'ini yok sayar ve "Checking for updates"
+#    ekranında takılır).
+./macos/discord-proxy
 ```
 
 Günlük kullanım:
@@ -237,7 +239,10 @@ sudo networksetup -setdnsservers              "Wi-Fi" Empty
 ## Sorun giderme
 
 - **Discord "Güncelleniyor..." ekranında takılıyor**: Güncelleyici
-  `updates.discord.com` tüneline giremiyorsa bu ekranda kalır. En sık nedeni
+  `updates.discord.com` tüneline giremiyorsa bu ekranda kalır. Önce Discord'u
+  Dock/Finder'dan değil `./macos/discord-proxy` ile açtığınızdan emin olun;
+  güncelleyici sistem PAC'ini yok saydığı için normal açılışta bu ekran sürüm
+  güncel olsa bile kalıcıdır. Başlatıcı ile de takılıyorsa en sık neden
   seçilen DPI yöntemidir: Discord'un güncelleyicisi (reqwest/native-tls)
   **TLS 1.2** kullanır ve `--split 1+s`, `--disorder`, `--tlsrec 3+s`, `--oob`
   gibi yöntemler yalnızca TLS 1.3'ü geçirir. Varsayılan yöntem bu yüzden
@@ -254,7 +259,7 @@ sudo networksetup -setdnsservers              "Wi-Fi" Empty
   `SoftResourceLimits`/`HardResourceLimits` ile **10240** FD ayarlıyor.
 
   Ardından `sudo ./macos/goodbyedpi status` ile güncelleyici yolunu test edin
-  ve Discord'u tamamen kapatıp yeniden açın.
+  ve Discord'u tamamen kapatıp `./macos/discord-proxy` ile yeniden açın.
 - **"Operation not permitted" hatası**: Script'i mutlaka `sudo` ile çalıştırın.
   Script kendiliğinden sudo'ya geçer ama yine de yönetici şifresi sorulur.
 - **"ciadpi bulunamadı"**: Önce `./macos/build.sh` çalıştırın.
@@ -317,13 +322,23 @@ brew install gost
 sudo ./macos/goodbyedpi start     # launchd + PAC + GOST
 ```
 
-Discord'u normal şekilde (Finder, Dock) açabilirsiniz; uygulama PAC'i izler.
-Güncelleme "Güncelleniyor..." ekranında takılırsa Discord'u tamamen kapatıp
-(Cmd+Q) başlatıcı ile açın:
+Discord'u **her zaman** başlatıcı ile açın; Dock/Finder'dan açmak yeterli
+değildir:
 
 ```bash
 ./macos/discord-proxy
 ```
+
+Uygulamanın kendisi PAC'i izlediği için normal açılışta da mesajlaşma
+çalışır, ancak güncelleyici ortam değişkenlerini alamadığı için
+`updates.discord.com` manifestine erişemez ve sürüm güncel olsa bile sonsuz
+"Checking for updates" döngüsüne girer. Bu yüzden Dock/Finder'dan değil,
+yukarıdaki komutla başlatın.
+
+Güncelleme uygulandığında Discord kendini yeniden başlatır ve bu yeni süreç
+başlatıcının ortam değişkenlerini **miras almaz**; ekran yine
+"Checking for updates"ta kalırsa Cmd+Q ile kapatıp `./macos/discord-proxy`
+komutunu tekrar çalıştırın.
 
 Kaldırmak için:
 
